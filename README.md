@@ -1,9 +1,3 @@
-<p align="center">
-  <img width="560" height="144" alt="DiabloNext" src="https://github.com/user-attachments/assets/7ac73801-ef7b-4cc1-8442-a191a2a0a1ce" />
-</p>
-
----
-
 # DiabloNext
 
 DiabloNext is a **personal fork and gameplay/engine experiment** based on [DevilutionX](https://github.com/diasurgical/devilutionX).
