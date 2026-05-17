@@ -11,6 +11,7 @@
 #include "engine/random.hpp"
 #include "game_mode.hpp"
 #include "inv.h"
+#include "inv_iterators.hpp"
 #include "minitext.h"
 #include "stores.h"
 #include "tables/textdat.h"

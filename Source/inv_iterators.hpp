@@ -8,6 +8,7 @@
 
 #include "items.h"
 #include "player.h"
+#include "utils/algorithm/container.hpp"
 
 namespace devilution {
 
@@ -365,5 +366,139 @@ public:
 private:
 	PlayerT *player_;
 };
+
+/**
+ * @brief Checks whether the player has an inventory item matching the predicate.
+ */
+template <typename Predicate>
+bool HasInventoryItem(const Player &player, Predicate &&predicate)
+{
+	const InventoryPlayerItemsRange items { player };
+	return c_find_if(items, std::forward<Predicate>(predicate)) != items.end();
+}
+
+/**
+ * @brief Checks whether the player has a belt item matching the predicate.
+ */
+template <typename Predicate>
+bool HasBeltItem(const Player &player, Predicate &&predicate)
+{
+	const BeltPlayerItemsRange items { player };
+	return c_find_if(items, std::forward<Predicate>(predicate)) != items.end();
+}
+
+/**
+ * @brief Checks whether the player has an inventory or a belt item matching the predicate.
+ */
+template <typename Predicate>
+bool HasInventoryOrBeltItem(const Player &player, Predicate &&predicate)
+{
+	return HasInventoryItem(player, predicate) || HasBeltItem(player, predicate);
+}
+
+/**
+ * @brief Checks whether the player has an inventory item with the given ID (IDidx).
+ */
+inline bool HasInventoryItemWithId(const Player &player, _item_indexes id)
+{
+	return HasInventoryItem(player, [id](const Item &item) {
+		return item.IDidx == id;
+	});
+}
+
+/**
+ * @brief Checks whether the player has a belt item with the given ID (IDidx).
+ */
+inline bool HasBeltItemWithId(const Player &player, _item_indexes id)
+{
+	return HasBeltItem(player, [id](const Item &item) {
+		return item.IDidx == id;
+	});
+}
+
+/**
+ * @brief Checks whether the player has an inventory or a belt item with the given ID (IDidx).
+ */
+inline bool HasInventoryOrBeltItemWithId(const Player &player, _item_indexes id)
+{
+	return HasInventoryItemWithId(player, id) || HasBeltItemWithId(player, id);
+}
+
+/**
+ * @brief Removes the first inventory item matching the predicate.
+ *
+ * @return Whether an item was found and removed.
+ */
+template <typename Predicate>
+bool RemoveInventoryItem(Player &player, Predicate &&predicate)
+{
+	const InventoryPlayerItemsRange items { player };
+	const auto it = c_find_if(items, std::forward<Predicate>(predicate));
+	if (it == items.end())
+		return false;
+	player.RemoveInvItem(static_cast<int>(it.index()));
+	return true;
+}
+
+/**
+ * @brief Removes the first belt item matching the predicate.
+ *
+ * @return Whether an item was found and removed.
+ */
+template <typename Predicate>
+bool RemoveBeltItem(Player &player, Predicate &&predicate)
+{
+	const BeltPlayerItemsRange items { player };
+	const auto it = c_find_if(items, std::forward<Predicate>(predicate));
+	if (it == items.end())
+		return false;
+	player.RemoveSpdBarItem(static_cast<int>(it.index()));
+	return true;
+}
+
+/**
+ * @brief Removes the first inventory or belt item matching the predicate.
+ *
+ * @return Whether an item was found and removed.
+ */
+template <typename Predicate>
+bool RemoveInventoryOrBeltItem(Player &player, Predicate &&predicate)
+{
+	return RemoveInventoryItem(player, predicate) || RemoveBeltItem(player, predicate);
+}
+
+/**
+ * @brief Removes the first inventory item with the given id (IDidx).
+ *
+ * @return Whether an item was found and removed.
+ */
+inline bool RemoveInventoryItemById(Player &player, _item_indexes id)
+{
+	return RemoveInventoryItem(player, [id](const Item &item) {
+		return item.IDidx == id;
+	});
+}
+
+/**
+ * @brief Removes the first belt item with the given id (IDidx).
+ *
+ * @return Whether an item was found and removed.
+ */
+inline bool RemoveBeltItemById(Player &player, _item_indexes id)
+{
+	return RemoveBeltItem(player, [id](const Item &item) {
+		return item.IDidx == id;
+	});
+}
+
+/**
+ * @brief Removes the first inventory or belt item with the given id (IDidx).
+ *
+ * @return Whether an item was found and removed.
+ */
+inline bool RemoveInventoryOrBeltItemById(Player &player, _item_indexes id)
+{
+	return RemoveInventoryItemById(player, id) || RemoveBeltItemById(player, id);
+}
 
 } // namespace devilution

@@ -19,6 +19,7 @@
 #include "levels/gendung.h"
 #include "minitext.h"
 #include "panels/ui_panels.hpp"
+#include "player.h"
 #include "qol/stash.h"
 #include "stores.h"
 #include "towners.h"

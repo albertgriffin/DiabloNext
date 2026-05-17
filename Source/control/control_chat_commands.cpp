@@ -5,6 +5,8 @@
 #include "engine/backbuffer_state.hpp"
 #include "inv.h"
 #include "levels/setmaps.h"
+#include "multi.h"
+#include "player.h"
 #include "players/lifecycle.hpp"
 #include "storm/storm_net.hpp"
 #include "utils/algorithm/container.hpp"

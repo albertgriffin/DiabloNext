@@ -4,6 +4,7 @@
 #include "DiabloUI/text_input.hpp"
 #include "engine/render/clx_render.hpp"
 #include "inv.h"
+#include "player.h"
 #include "utils/display.h"
 #include "utils/format_int.hpp"
 #include "utils/log.hpp"

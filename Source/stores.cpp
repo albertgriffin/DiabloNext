@@ -31,6 +31,7 @@
 #include "multi.h"
 #include "options.h"
 #include "panels/info_box.hpp"
+#include "player.h"
 #include "qol/stash.h"
 #include "qol/visual_store.h"
 #include "tables/townerdat.hpp"

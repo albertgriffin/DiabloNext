@@ -17,6 +17,7 @@
 #include "controls/padmapper.hpp"
 #include "controls/plrctrls.h"
 #include "controls/touch/gamepad.h"
+#include "diablo.h"
 #include "doom.h"
 #include "gamemenu.h"
 #include "gmenu.h"
