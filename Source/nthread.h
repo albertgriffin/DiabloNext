@@ -5,9 +5,10 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
-#include "player.h"
+#include "multi.h"
 #include "utils/attributes.h"
 
 namespace devilution {

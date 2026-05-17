@@ -11,7 +11,6 @@
 #include <expected.hpp>
 
 #include "DiabloUI/diabloui.h"
-#include "player.h"
 
 #ifdef UNPACKED_SAVES
 #include "utils/file_util.h"
@@ -21,6 +20,8 @@
 #endif
 
 namespace devilution {
+
+struct Player;
 
 #define MAX_CHARACTERS 99
 

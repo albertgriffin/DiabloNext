@@ -17,11 +17,12 @@
 #include "engine/clx_sprite.hpp"
 #include "items.h"
 #include "levels/dun_tile.hpp"
-#include "player.h"
 #include "quests.h"
 #include "utils/attributes.h"
 
 namespace devilution {
+
+struct Player;
 
 enum _talker_id : uint8_t {
 	TOWN_SMITH,
