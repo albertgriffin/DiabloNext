@@ -648,6 +648,14 @@ endif()
 
 add_devilutionx_object_library(libdevilutionx_player
   player.cpp
+  players/actions.cpp
+  players/animation.cpp
+  players/combat.cpp
+  players/death.cpp
+  players/lifecycle.cpp
+  players/movement.cpp
+  players/player.cpp
+  players/progression.cpp
   tables/playerdat.cpp
 )
 target_link_dependencies(libdevilutionx_player

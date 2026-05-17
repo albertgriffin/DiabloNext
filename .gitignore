@@ -402,7 +402,8 @@ ASALocalRun/
 # Edit at https://www.gitignore.io/?templates=xcode
 
 ### Visual Code
-/.vscode
+/.vscode/*
+!/.vscode/settings.json
 
 ### Xcode ###
 # Xcode
@@ -453,7 +454,6 @@ exefs/main
 # ddraw wrapper configuration file
 ddraw_settings.ini
 Brewfile.lock.json
-.vscode/settings.json
 
 # GPerf heap profile dumps
 *.heap
