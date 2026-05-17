@@ -1,9 +1,14 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <deque>
 #include <memory>
 #include <set>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #ifdef USE_SDL3
 #include <SDL3/SDL_timer.h>
@@ -15,7 +20,8 @@
 
 #include "dvlnet/base.h"
 #include "dvlnet/packet.h"
-#include "player.h"
+#include "dvlnet/player_info.h"
+#include "players/player_types.hpp"
 #include "utils/algorithm/container.hpp"
 #include "utils/is_of.hpp"
 #include "utils/log.hpp"
@@ -84,7 +90,7 @@ template <class P>
 plr_t base_protocol<P>::get_master()
 {
 	plr_t ret = plr_self;
-	for (plr_t i = 0; i < Players.size(); ++i)
+	for (plr_t i = 0; i < GetPlayerCount(); ++i)
 		if (peers[i].endpoint)
 			ret = std::min(ret, i);
 	return ret;
@@ -257,7 +263,7 @@ tl::expected<void, PacketError> base_protocol<P>::send(packet &pkt)
 {
 	plr_t destination = pkt.Destination();
 	if (destination == PLR_BROADCAST) {
-		for (plr_t player = 0; player < Players.size(); player++) {
+		for (plr_t player = 0; player < GetPlayerCount(); player++) {
 			tl::expected<void, PacketError> result = SendTo(player, pkt);
 			if (!result.has_value())
 				LogError("Failed to send packet {} to player {}: {}", static_cast<uint8_t>(pkt.Type()), player, result.error().what());
@@ -306,7 +312,7 @@ void base_protocol<P>::recv()
 		}
 	}
 	while (proto.get_disconnected(sender)) {
-		for (plr_t i = 0; i < Players.size(); ++i) {
+		for (plr_t i = 0; i < GetPlayerCount(); ++i) {
 			if (peers[i].endpoint == sender) {
 				DisconnectNet(i);
 				break;
@@ -319,7 +325,7 @@ template <class P>
 tl::expected<void, PacketError> base_protocol<P>::handle_join_request(packet &inPkt, endpoint_t sender)
 {
 	plr_t i;
-	for (i = 0; i < Players.size(); ++i) {
+	for (i = 0; i < GetPlayerCount(); ++i) {
 		Peer &peer = peers[i];
 		if (i != plr_self && !peer.endpoint) {
 			peer.endpoint = sender;
@@ -337,7 +343,7 @@ tl::expected<void, PacketError> base_protocol<P>::handle_join_request(packet &in
 	}
 
 	auto senderinfo = sender.serialize();
-	for (plr_t j = 0; j < Players.size(); ++j) {
+	for (plr_t j = 0; j < GetPlayerCount(); ++j) {
 		endpoint_t peer = peers[j].endpoint;
 		if ((j != plr_self) && (j != i) && peer) {
 			tl::expected<void, PacketError> result
@@ -383,7 +389,7 @@ tl::expected<void, PacketError> base_protocol<P>::recv_decrypted(packet &pkt, en
 		if (gameData.size != sizeof(GameData))
 			return {};
 		std::vector<std::string> playerNames;
-		for (size_t i = 0; i < Players.size(); i++) {
+		for (size_t i = 0; i < GetPlayerCount(); i++) {
 			std::string_view playerNameBuffer {
 				reinterpret_cast<const char *>(infoBuffer.data() + sizeof(GameData) + (i * PlayerNameLength)),
 				PlayerNameLength
@@ -419,12 +425,8 @@ tl::expected<void, PacketError> base_protocol<P>::recv_ingame(packet &pkt, endpo
 				buffer_t buf;
 				buf.resize(game_init_info.size() + (PlayerNameLength * MAX_PLRS) + gamename.size());
 				std::memcpy(buf.data(), &game_init_info[0], game_init_info.size());
-				for (size_t i = 0; i < Players.size(); i++) {
-					if (Players[i].plractive) {
-						std::memcpy(buf.data() + game_init_info.size() + (i * PlayerNameLength), &Players[i]._pName, PlayerNameLength);
-					} else {
-						std::memset(buf.data() + game_init_info.size() + (i * PlayerNameLength), '\0', PlayerNameLength);
-					}
+				for (plr_t i = 0; i < GetPlayerCount(); i++) {
+					CopyActivePlayerName(i, buf.data() + game_init_info.size() + (i * PlayerNameLength));
 				}
 				std::memcpy(buf.data() + game_init_info.size() + (PlayerNameLength * MAX_PLRS), &gamename[0], gamename.size());
 				tl::expected<std::unique_ptr<packet>, PacketError> reply
@@ -494,7 +496,7 @@ tl::expected<void, PacketError> base_protocol<P>::recv_ingame(packet &pkt, endpo
 	if (plr_self != PLR_BROADCAST) {
 		if (wasBroadcast) {
 			// Send a handshake to everyone just after PT_JOIN_ACCEPT
-			for (plr_t player = 0; player < Players.size(); player++) {
+			for (plr_t player = 0; player < GetPlayerCount(); player++) {
 				if (tl::expected<void, PacketError> result = InitiateHandshake(player);
 				    !result.has_value()) {
 					return result;
