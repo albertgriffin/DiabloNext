@@ -18,6 +18,9 @@
 #include "gamemenu.h"
 #include "inv.h"
 #include "missiles.h"
+#include "players/death.hpp"
+#include "players/lifecycle.hpp"
+#include "players/movement.hpp"
 
 namespace devilution {
 

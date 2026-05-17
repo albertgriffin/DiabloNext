@@ -17,6 +17,7 @@
 #include "inv.h"
 #include "options.h"
 #include "pfile.h"
+#include "players/animation.hpp"
 #include "qol/monhealthbar.h"
 #include "qol/stash.h"
 #include "stores.h"

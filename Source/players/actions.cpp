@@ -24,6 +24,7 @@
 #include "msg.h"
 #include "objects.h"
 #include "options.h"
+#include "players/actions.hpp"
 #include "players/combat.hpp"
 #include "players/death.hpp"
 #include "players/movement.hpp"
@@ -521,6 +522,11 @@ void ProcessPlayers()
 				player.AnimInfo.processAnimation();
 		}
 	}
+}
+
+void CheckPlrSpell(bool isShiftHeld)
+{
+	CheckPlrSpell(isShiftHeld, MyPlayer->_pRSpell, MyPlayer->_pRSplType);
 }
 
 void CheckPlrSpell(bool isShiftHeld, SpellID spellID, SpellType spellType)

@@ -20,6 +20,7 @@
 #include "missiles.h"
 #include "monster.h"
 #include "msg.h"
+#include "player.h"
 #include "players/animation.hpp"
 #include "players/combat.hpp"
 #include "players/movement.hpp"

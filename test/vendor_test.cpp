@@ -3,6 +3,7 @@
 
 #include "items.h"
 #include "player.h"
+#include "players/lifecycle.hpp"
 #include "stores.h"
 #include "tables/playerdat.hpp"
 

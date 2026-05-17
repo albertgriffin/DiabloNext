@@ -17,6 +17,7 @@
 #include "diablo_msg.hpp"
 #include "game_mode.hpp"
 #include "multi.h"
+#include "players/lifecycle.hpp"
 #include "utils/algorithm/container.hpp"
 #include "utils/is_of.hpp"
 #include "utils/language.h"

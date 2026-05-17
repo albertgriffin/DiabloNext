@@ -14,6 +14,7 @@
 #include "game_mode.hpp"
 #include "headless_mode.hpp"
 #include "levels/gendung.h"
+#include "player.h"
 #include "tables/playerdat.hpp"
 #include "tables/spelldat.h"
 #include "utils/enum_traits.h"

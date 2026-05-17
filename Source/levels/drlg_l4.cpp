@@ -7,12 +7,12 @@
 
 #include <cstdint>
 
+#include "diablo.h"
 #include "engine/load_file.hpp"
 #include "engine/random.hpp"
 #include "levels/gendung.h"
 #include "monster.h"
 #include "multi.h"
-#include "player.h"
 #include "tables/objdat.h"
 #include "utils/is_of.hpp"
 

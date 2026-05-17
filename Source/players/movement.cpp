@@ -11,6 +11,10 @@
 #include "monster.h"
 #include "multi.h"
 #include "options.h"
+#include "player.h"
+#include "players/animation.hpp"
+#include "players/combat.hpp"
+#include "players/death.hpp"
 #include "qol/autopickup.h"
 #include "utils/is_of.hpp"
 

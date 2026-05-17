@@ -33,6 +33,8 @@
 #include "monsters/validation.hpp"
 #include "mpq/mpq_common.hpp"
 #include "pfile.h"
+#include "players/animation.hpp"
+#include "players/lifecycle.hpp"
 #include "plrmsg.h"
 #include "qol/stash.h"
 #include "stores.h"

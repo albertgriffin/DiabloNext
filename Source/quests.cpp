@@ -28,6 +28,7 @@
 #include "monster.h"
 #include "options.h"
 #include "panels/ui_panels.hpp"
+#include "players/lifecycle.hpp"
 #include "stores.h"
 #include "tables/townerdat.hpp"
 #include "towners.h"

@@ -1,8 +1,11 @@
 #pragma once
 
-#include "player.h"
+#include "engine/direction.hpp"
+#include "engine/world_tile.hpp"
 
 namespace devilution {
+
+struct Player;
 
 void RefreshPlayerCombatCooldown(Player &player);
 void UpdatePlayerCombatCooldown(Player &player);
@@ -14,5 +17,8 @@ bool DoRangeAttack(Player &player);
 bool DoBlock(Player &player);
 bool DoSpell(Player &player);
 bool DoGotHit(Player &player);
+bool PlayerIsInCombat(const Player &player);
+void StartPlrBlock(Player &player, Direction dir);
+void StartPlrHit(Player &player, int dam, bool forcehit);
 
 } // namespace devilution

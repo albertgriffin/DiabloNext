@@ -18,6 +18,7 @@
 #include "items/validation.h"
 #include "levels/gendung.h"
 #include "msg.h"
+#include "players/movement.hpp"
 #include "spells.h"
 #include "tables/playerdat.hpp"
 #include "utils/is_of.hpp"

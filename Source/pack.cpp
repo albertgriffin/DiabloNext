@@ -11,6 +11,8 @@
 #include "game_mode.hpp"
 #include "items/validation.h"
 #include "loadsave.h"
+#include "players/lifecycle.hpp"
+#include "players/movement.hpp"
 #include "plrmsg.h"
 #include "stores.h"
 #include "tables/playerdat.hpp"
