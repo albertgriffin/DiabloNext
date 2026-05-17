@@ -653,6 +653,7 @@ add_devilutionx_object_library(libdevilutionx_player
   players/animation.cpp
   players/combat.cpp
   players/death.cpp
+  players/item_iterators.cpp
   players/lifecycle.cpp
   players/movement.cpp
   players/player.cpp

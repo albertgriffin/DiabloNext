@@ -60,7 +60,7 @@
 #include "game_mode.hpp"
 #include "headless_mode.hpp"
 #include "inv.h"
-#include "inv_iterators.hpp"
+#include "players/item_iterators.hpp"
 #include "items.h"
 #include "levels/crypt.h"
 #include "levels/drlg_l4.h"

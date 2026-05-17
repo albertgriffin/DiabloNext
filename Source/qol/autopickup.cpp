@@ -8,7 +8,7 @@
 #include <algorithm>
 
 #include "inv.h"
-#include "inv_iterators.hpp"
+#include "players/item_iterators.hpp"
 #include "options.h"
 #include "player.h"
 #include "utils/algorithm/container.hpp"

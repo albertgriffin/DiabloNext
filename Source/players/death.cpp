@@ -13,7 +13,7 @@
 #include "game_mode.hpp"
 #include "gamemenu.h"
 #include "inv.h"
-#include "inv_iterators.hpp"
+#include "players/item_iterators.hpp"
 #include "items.h"
 #include "levels/gendung.h"
 #include "lua/lua_event.hpp"

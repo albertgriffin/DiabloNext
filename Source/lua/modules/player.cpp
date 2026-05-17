@@ -9,7 +9,7 @@
 #include "engine/point.hpp"
 #include "engine/random.hpp"
 #include "inv.h"
-#include "inv_iterators.hpp"
+#include "players/item_iterators.hpp"
 #include "items.h"
 #include "lua/metadoc.hpp"
 #include "player.h"

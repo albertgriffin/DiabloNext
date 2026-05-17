@@ -51,7 +51,7 @@
 #include "game_mode.hpp"
 #include "headless_mode.hpp"
 #include "inv.h"
-#include "inv_iterators.hpp"
+#include "players/item_iterators.hpp"
 #include "items/validation.h"
 #include "levels/gendung.h"
 #include "levels/gendung_defs.hpp"

@@ -34,7 +34,7 @@
 #include "gamemenu.h"
 #include "headless_mode.hpp"
 #include "help.h"
-#include "inv_iterators.hpp"
+#include "players/item_iterators.hpp"
 #include "levels/tile_properties.hpp"
 #include "levels/trigs.h"
 #include "lighting.h"

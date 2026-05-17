@@ -14,7 +14,7 @@
 #include "effects.h"
 #include "engine/backbuffer_state.hpp"
 #include "engine/random.hpp"
-#include "inv_iterators.hpp"
+#include "players/item_iterators.hpp"
 #include "items/validation.h"
 #include "levels/gendung.h"
 #include "msg.h"
