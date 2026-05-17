@@ -26,7 +26,10 @@
 #include "levels/dun_tile.hpp"
 #include "levels/gendung.h"
 #include "multi.h"
+#include "players/inventory_types.hpp"
 #include "players/player_types.hpp"
+#include "players/spell_types.hpp"
+#include "players/stat_types.hpp"
 #include "tables/playerdat.hpp"
 #include "tables/spelldat.h"
 #include "utils/attributes.h"
@@ -34,14 +37,6 @@
 #include "utils/is_of.hpp"
 
 namespace devilution {
-
-constexpr int InventoryGridCells = 80;
-constexpr int MaxBeltItems = 8;
-constexpr int MaxResistance = 75;
-constexpr uint8_t MaxSpellLevel = 15;
-constexpr int PlayerNameLength = 32;
-
-constexpr size_t NumHotkeys = 12;
 
 /** Walking directions */
 enum {
@@ -56,28 +51,6 @@ enum {
 	WALK_W    =  8,
 	WALK_NONE = -1,
 	// clang-format on
-};
-
-enum class CharacterAttribute : uint8_t {
-	Strength,
-	Magic,
-	Dexterity,
-	Vitality,
-
-	FIRST = Strength,
-	LAST = Vitality
-};
-
-// Logical equipment locations
-enum inv_body_loc : uint8_t {
-	INVLOC_HEAD,
-	INVLOC_RING_LEFT,
-	INVLOC_RING_RIGHT,
-	INVLOC_AMULET,
-	INVLOC_HAND_LEFT,
-	INVLOC_HAND_RIGHT,
-	INVLOC_CHEST,
-	NUM_INVLOC,
 };
 
 enum PLR_MODE : uint8_t {
@@ -117,17 +90,6 @@ enum action_id : int8_t {
 	ACTION_SPELLWALL   = 26,
 	// clang-format on
 };
-
-enum class SpellFlag : uint8_t {
-	// clang-format off
-	None         = 0,
-	Etherealize  = 1 << 0,
-	RageActive   = 1 << 1,
-	RageCooldown = 1 << 2,
-	// bits 3-7 are unused
-	// clang-format on
-};
-use_enum_as_flags(SpellFlag);
 
 /**
  * @brief Contains Data (CelSprites) for a player graphic (player_graphic)

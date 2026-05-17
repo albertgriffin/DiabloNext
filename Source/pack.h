@@ -7,12 +7,14 @@
 
 #include <cstdint>
 
-#include "inv.h"
 #include "items.h"
 #include "msg.h"
-#include "player.h"
+#include "players/inventory_types.hpp"
+#include "players/player_types.hpp"
 
 namespace devilution {
+
+struct Player;
 
 #define MAX_SPELLS 52
 

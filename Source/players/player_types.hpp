@@ -5,6 +5,8 @@
 
 namespace devilution {
 
+constexpr int PlayerNameLength = 32;
+
 enum class player_graphic : uint8_t {
 	Stand,
 	Walk,

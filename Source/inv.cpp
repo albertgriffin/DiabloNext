@@ -3,6 +3,8 @@
  *
  * Implementation of player inventory.
  */
+#include "inv.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>

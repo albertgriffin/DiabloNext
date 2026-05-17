@@ -63,6 +63,8 @@
 #endif
 #endif
 
+#include "utils/algorithm/container.hpp"
+
 namespace devilution {
 
 extern SDLSurfaceUniquePtr RendererTextureSurface; /** defined in dx.cpp */

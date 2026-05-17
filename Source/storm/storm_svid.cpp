@@ -28,6 +28,7 @@
 
 #include <SmackerDecoder.h>
 
+#include "diablo.h"
 #include "engine/assets.hpp"
 #include "engine/dx.h"
 #include "engine/palette.h"

@@ -13,6 +13,7 @@
 #include "engine/trn.hpp"
 #include "gamemenu.h"
 #include "headless_mode.hpp"
+#include "inv.h"
 #include "minitext.h"
 #include "options.h"
 #include "panels/charpanel.hpp"

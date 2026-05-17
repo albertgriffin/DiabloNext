@@ -34,6 +34,7 @@
 #include "engine/random.hpp"
 #include "engine/world_tile.hpp"
 #include "gamemenu.h"
+#include "inv.h"
 #include "items/validation.h"
 #include "levels/crypt.h"
 #include "levels/town.h"

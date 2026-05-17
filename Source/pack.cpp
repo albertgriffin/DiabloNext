@@ -9,6 +9,7 @@
 
 #include "engine/random.hpp"
 #include "game_mode.hpp"
+#include "inv.h"
 #include "items/validation.h"
 #include "loadsave.h"
 #include "players/lifecycle.hpp"

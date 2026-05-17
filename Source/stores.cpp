@@ -25,6 +25,7 @@
 #include "engine/render/text_render.hpp"
 #include "engine/trn.hpp"
 #include "game_mode.hpp"
+#include "inv.h"
 #include "lua/lua_event.hpp"
 #include "minitext.h"
 #include "multi.h"

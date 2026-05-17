@@ -14,6 +14,7 @@
 
 #include "cursor.h"
 #include "engine/random.hpp"
+#include "inv.h"
 #include "items.h"
 #include "lua/metadoc.hpp"
 #include "pack.h"

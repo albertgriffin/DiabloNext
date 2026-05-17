@@ -19,6 +19,7 @@
 
 #include "controls/control_mode.hpp"
 #include "controls/plrctrls.h"
+#include "engine/palette.h"
 #include "engine/render/primitive_render.hpp"
 #include "headless_mode.hpp"
 #include "init.hpp"
