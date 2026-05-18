@@ -3,6 +3,7 @@
  *
  * Implementation of player functionality, leveling, actions, creation, loading, etc.
  */
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -34,7 +35,6 @@
 #include "gamemenu.h"
 #include "headless_mode.hpp"
 #include "help.h"
-#include "players/item_iterators.hpp"
 #include "levels/tile_properties.hpp"
 #include "levels/trigs.h"
 #include "lighting.h"
@@ -49,6 +49,7 @@
 #include "players/animation.hpp"
 #include "players/combat.hpp"
 #include "players/death.hpp"
+#include "players/item_iterators.hpp"
 #include "players/movement.hpp"
 #include "qol/autopickup.h"
 #include "qol/stash.h"
@@ -72,6 +73,70 @@ bool MyPlayerIsDead;
 size_t PlayersCount()
 {
 	return Players.size();
+}
+
+uint8_t LocalPlayerId()
+{
+	return MyPlayerId;
+}
+
+bool HasLocalPlayer()
+{
+	return MyPlayer != nullptr;
+}
+
+const Player &LocalPlayer()
+{
+	assert(HasLocalPlayer());
+	return *MyPlayer;
+}
+
+Player &MutableLocalPlayer()
+{
+	assert(HasLocalPlayer());
+	return *MyPlayer;
+}
+
+const Player &GetPlayer(size_t playerId)
+{
+	assert(IsValidPlayerId(playerId));
+	return Players[playerId];
+}
+
+Player &GetMutablePlayer(size_t playerId)
+{
+	assert(IsValidPlayerId(playerId));
+	return Players[playerId];
+}
+
+bool IsValidPlayerId(size_t playerId)
+{
+	return playerId < PlayersCount();
+}
+
+bool IsPlayerActive(size_t playerId)
+{
+	return IsValidPlayerId(playerId) && GetPlayer(playerId).plractive;
+}
+
+bool IsPlayerFriendly(size_t playerId)
+{
+	return IsValidPlayerId(playerId) && GetPlayer(playerId).friendlyMode;
+}
+
+bool IsLocalPlayerId(size_t playerId)
+{
+	return playerId == LocalPlayerId();
+}
+
+bool IsLocalPlayer(const Player &player)
+{
+	return &player == MyPlayer;
+}
+
+const char (&GetPlayerName(size_t playerId))[PlayerNameLength]
+{
+	return GetPlayer(playerId)._pName;
 }
 
 void Player::UpdatePreviewCelSprite(_cmd_id cmdId, Point point, uint16_t wParam1, uint16_t wParam2)

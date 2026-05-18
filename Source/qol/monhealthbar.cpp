@@ -5,6 +5,7 @@
  */
 #include "monhealthbar.h"
 
+#include <array>
 #include <cstdint>
 
 #include <fmt/format.h>
@@ -16,8 +17,9 @@
 #include "engine/render/clx_render.hpp"
 #include "engine/render/primitive_render.hpp"
 #include "game_mode.hpp"
+#include "monster.h"
 #include "options.h"
-#include "player.h"
+#include "players/player_globals.hpp"
 #include "utils/language.h"
 #include "utils/str_cat.hpp"
 
@@ -175,12 +177,13 @@ void DrawMonsterHealthBar(const Surface &out)
 		}
 	}
 
-	if (Players.size() > 1) {
+	const size_t playerCount = PlayersCount();
+	if (playerCount > 1) {
 		int tagOffset = 5;
-		for (size_t i = 0; i < Players.size(); i++) {
+		for (size_t i = 0; i < playerCount; i++) {
 			if (((1U << i) & monster.whoHit) != 0) {
 				RenderClxSprite(out, (*playerExpTags)[i + 1], position + Displacement { tagOffset, height - 31 });
-			} else if (Players[i].plractive) {
+			} else if (IsPlayerActive(i)) {
 				RenderClxSprite(out, (*playerExpTags)[0], position + Displacement { tagOffset, height - 31 });
 			}
 			tagOffset += (*playerExpTags)[0].width();

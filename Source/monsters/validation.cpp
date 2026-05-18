@@ -9,7 +9,7 @@
 #include <cstddef>
 
 #include "monster.h"
-#include "player.h"
+#include "players/player_globals.hpp"
 
 namespace devilution {
 
@@ -20,7 +20,7 @@ bool IsEnemyValid(size_t enemyId, bool checkMonsterTable)
 	if (enemyId < MaxMonsters)
 		return !checkMonsterTable || Monsters[enemyId].hitPoints > 0;
 	const size_t playerId = enemyId - MaxMonsters;
-	return playerId < Players.size() && Players[playerId].plractive;
+	return IsPlayerActive(playerId);
 }
 
 } // namespace
