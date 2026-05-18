@@ -8,7 +8,14 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
-#if !defined(__DJGPP__) && !defined(__EMSCRIPTEN__) && !defined(__amigaos__)
+
+#if defined(WINVER) && WINVER <= 0x0500 && (!defined(_WIN32_WINNT) || _WIN32_WINNT == 0)
+#define DEVILUTIONX_LEGACY_WINDOWS_9X 1
+#else
+#define DEVILUTIONX_LEGACY_WINDOWS_9X 0
+#endif
+
+#if !defined(__DJGPP__) && !defined(__EMSCRIPTEN__) && !defined(__amigaos__) && !DEVILUTIONX_LEGACY_WINDOWS_9X
 #include <thread>
 #endif
 
@@ -27,7 +34,7 @@
 #include "utils/display.h"
 #include "utils/sdl_compat.h"
 
-#if !defined(__DJGPP__) && !defined(__EMSCRIPTEN__) && !defined(__amigaos__)
+#if !defined(__DJGPP__) && !defined(__EMSCRIPTEN__) && !defined(__amigaos__) && !DEVILUTIONX_LEGACY_WINDOWS_9X
 #define DEVILUTIONX_PARALLEL_COMPOSITION 1
 #else
 #define DEVILUTIONX_PARALLEL_COMPOSITION 0
@@ -602,3 +609,4 @@ void ComposeFrameToOutput(SDL_Surface *outputSurface)
 } // namespace devilution
 
 #undef DEVILUTIONX_PARALLEL_COMPOSITION
+#undef DEVILUTIONX_LEGACY_WINDOWS_9X
