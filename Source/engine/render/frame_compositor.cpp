@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
-#if !defined(__DJGPP__) && !defined(__EMSCRIPTEN__)
+#if !defined(__DJGPP__) && !defined(__EMSCRIPTEN__) && !defined(__amigaos__)
 #include <thread>
 #endif
 
@@ -27,7 +27,7 @@
 #include "utils/display.h"
 #include "utils/sdl_compat.h"
 
-#if !defined(__DJGPP__) && !defined(__EMSCRIPTEN__)
+#if !defined(__DJGPP__) && !defined(__EMSCRIPTEN__) && !defined(__amigaos__)
 #define DEVILUTIONX_PARALLEL_COMPOSITION 1
 #else
 #define DEVILUTIONX_PARALLEL_COMPOSITION 0
