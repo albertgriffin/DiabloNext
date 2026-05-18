@@ -4,14 +4,9 @@ on:
   push:
     branches:
       - master
-    paths-ignore:
-      - '*.md'
-      - 'docs/**'
   pull_request:
-    types: [ opened, synchronize ]
-    paths-ignore:
-      - '*.md'
-      - 'docs/**'
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -19,21 +14,51 @@ concurrency:
 
 jobs:
   formatting-check:
+    name: clang-format check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - name: Checkout
       uses: actions/checkout@v6
       with:
         fetch-depth: 0
 
-    - name: Formatting Check (Source)
-      uses: jidicula/clang-format-action@v4.18.0
-      with:
-        clang-format-version: '18'
-        check-path: 'Source'
+    - name: Check changed C/C++ formatting
+      shell: bash
+      run: |
+        set -euo pipefail
 
-    - name: Formatting Check (test)
-      uses: jidicula/clang-format-action@v4.18.0
-      with:
-        clang-format-version: '18'
-        check-path: 'test'
+        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+        elif [[ "${{ github.event_name }}" == "push" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+          base="${{ github.event.before }}"
+          head="${{ github.sha }}"
+        else
+          base="$(git rev-list --max-parents=0 HEAD)"
+          head="HEAD"
+        fi
+
+        mapfile -t files < <(
+          git diff --name-only --diff-filter=ACMRT "${base}" "${head}" -- Source test \
+            | grep -E '\.((c|C)(c|pp|xx|\+\+)?|(h|H)h?(pp|xx|\+\+)?|ino|pde|proto|cu)$' \
+            || true
+        )
+
+        if [[ ${#files[@]} -eq 0 ]]; then
+          echo "No changed C/C++ files to format-check."
+          exit 0
+        fi
+
+        printf 'Checking clang-format for changed files:\n'
+        printf '  %s\n' "${files[@]}"
+
+        docker run --rm \
+          --volume "${PWD}:${PWD}" \
+          --workdir "${PWD}" \
+          ghcr.io/jidicula/clang-format:18 \
+          --dry-run \
+          --Werror \
+          --style=file \
+          --fallback-style=llvm \
+          "${files[@]}"
