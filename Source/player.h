@@ -6,10 +6,9 @@
 #pragma once
 
 #include <cstdint>
-#include <vector>
 
-#include <algorithm>
 #include <array>
+#include <string>
 #include <string_view>
 
 #include "diablo.h"
@@ -26,6 +25,7 @@
 #include "levels/dun_tile.hpp"
 #include "levels/gendung.h"
 #include "multi.h"
+#include "players/player_globals.hpp"
 #include "players/inventory_types.hpp"
 #include "players/player_types.hpp"
 #include "players/spell_types.hpp"
@@ -37,59 +37,6 @@
 #include "utils/is_of.hpp"
 
 namespace devilution {
-
-/** Walking directions */
-enum {
-	// clang-format off
-	WALK_NE   =  1,
-	WALK_NW   =  2,
-	WALK_SE   =  3,
-	WALK_SW   =  4,
-	WALK_N    =  5,
-	WALK_E    =  6,
-	WALK_S    =  7,
-	WALK_W    =  8,
-	WALK_NONE = -1,
-	// clang-format on
-};
-
-enum PLR_MODE : uint8_t {
-	PM_STAND,
-	PM_WALK_NORTHWARDS,
-	PM_WALK_SOUTHWARDS,
-	PM_WALK_SIDEWAYS,
-	PM_ATTACK,
-	PM_RATTACK,
-	PM_BLOCK,
-	PM_GOTHIT,
-	PM_DEATH,
-	PM_SPELL,
-	PM_NEWLVL,
-	PM_QUIT,
-};
-
-enum action_id : int8_t {
-	// clang-format off
-	ACTION_WALK        = -2, // Automatic walk when using gamepad
-	ACTION_NONE        = -1,
-	ACTION_ATTACK      = 9,
-	ACTION_RATTACK     = 10,
-	ACTION_SPELL       = 12,
-	ACTION_OPERATE     = 13,
-	ACTION_DISARM      = 14,
-	ACTION_PICKUPITEM  = 15, // put item in hand (inventory screen open)
-	ACTION_PICKUPAITEM = 16, // put item in inventory
-	ACTION_TALK        = 17,
-	ACTION_OPERATETK   = 18, // operate via telekinesis
-	ACTION_ATTACKMON   = 20,
-	ACTION_ATTACKPLR   = 21,
-	ACTION_RATTACKMON  = 22,
-	ACTION_RATTACKPLR  = 23,
-	ACTION_SPELLMON    = 24,
-	ACTION_SPELLPLR    = 25,
-	ACTION_SPELLWALL   = 26,
-	// clang-format on
-};
 
 /**
  * @brief Contains Data (CelSprites) for a player graphic (player_graphic)
@@ -311,49 +258,9 @@ public:
 
 	bool CanUseItem(const Item &item) const;
 
-	bool CanCleave()
-	{
-		switch (_pClass) {
-		case HeroClass::Warrior:
-		case HeroClass::Rogue:
-		case HeroClass::Sorcerer:
-			return false;
-		case HeroClass::Monk:
-			return isEquipped(ItemType::Staff);
-		case HeroClass::Bard:
-			return InvBody[INVLOC_HAND_LEFT]._itype == ItemType::Sword && InvBody[INVLOC_HAND_RIGHT]._itype == ItemType::Sword;
-		case HeroClass::Barbarian:
-			return isEquipped(ItemType::Axe) || (!isEquipped(ItemType::Shield) && (isEquipped(ItemType::Mace, true) || isEquipped(ItemType::Sword, true)));
-		default:
-			return false;
-		}
-	}
+	bool CanCleave();
 
-	bool isEquipped(ItemType itemType, bool isTwoHanded = false)
-	{
-		switch (itemType) {
-		case ItemType::Sword:
-		case ItemType::Axe:
-		case ItemType::Bow:
-		case ItemType::Mace:
-		case ItemType::Shield:
-		case ItemType::Staff:
-			return (InvBody[INVLOC_HAND_LEFT]._itype == itemType && (!isTwoHanded || InvBody[INVLOC_HAND_LEFT]._iLoc == ILOC_TWOHAND))
-			    || (InvBody[INVLOC_HAND_RIGHT]._itype == itemType && (!isTwoHanded || InvBody[INVLOC_HAND_LEFT]._iLoc == ILOC_TWOHAND));
-		case ItemType::LightArmor:
-		case ItemType::MediumArmor:
-		case ItemType::HeavyArmor:
-			return InvBody[INVLOC_CHEST]._itype == itemType;
-		case ItemType::Helm:
-			return InvBody[INVLOC_HEAD]._itype == itemType;
-		case ItemType::Ring:
-			return InvBody[INVLOC_RING_LEFT]._itype == itemType || InvBody[INVLOC_RING_RIGHT]._itype == itemType;
-		case ItemType::Amulet:
-			return InvBody[INVLOC_AMULET]._itype == itemType;
-		default:
-			return false;
-		}
-	}
+	bool isEquipped(ItemType itemType, bool isTwoHanded = false);
 
 	/**
 	 * @brief Remove an item from player inventory
@@ -461,77 +368,40 @@ public:
 	/**
 	 * @brief Returns item location taking into consideration barbarian's ability to hold two-handed maces and clubs in one hand.
 	 */
-	item_equip_type GetItemLocation(const Item &item) const
-	{
-		if (_pClass == HeroClass::Barbarian && item._iLoc == ILOC_TWOHAND && IsAnyOf(item._itype, ItemType::Sword, ItemType::Mace))
-			return ILOC_ONEHAND;
-		return item._iLoc;
-	}
+	item_equip_type GetItemLocation(const Item &item) const;
 
 	/**
 	 * @brief Return player's armor value
 	 */
-	int GetArmor() const
-	{
-		return _pIBonusAC + _pIAC + _pDexterity / 5;
-	}
+	int GetArmor() const;
 
 	/**
 	 * @brief Return player's melee to hit value
 	 */
-	int GetMeleeToHit() const
-	{
-		return getCharacterLevel() + _pDexterity / 2 + _pIBonusToHit + getPlayerCombatData().baseMeleeToHit;
-	}
+	int GetMeleeToHit() const;
 
 	/**
 	 * @brief Return player's melee to hit value, including armor piercing
 	 */
-	int GetMeleePiercingToHit() const
-	{
-		int hper = GetMeleeToHit();
-		// in hellfire armor piercing ignores % of enemy armor instead, no way to include it here
-		if (!gbIsHellfire)
-			hper += _pIEnAc;
-		return hper;
-	}
+	int GetMeleePiercingToHit() const;
 
 	/**
 	 * @brief Return player's ranged to hit value
 	 */
-	int GetRangedToHit() const
-	{
-		return getCharacterLevel() + _pDexterity + _pIBonusToHit + getPlayerCombatData().baseRangedToHit;
-	}
+	int GetRangedToHit() const;
 
-	int GetRangedPiercingToHit() const
-	{
-		int hper = GetRangedToHit();
-		// in hellfire armor piercing ignores % of enemy armor instead, no way to include it here
-		if (!gbIsHellfire)
-			hper += _pIEnAc;
-		return hper;
-	}
+	int GetRangedPiercingToHit() const;
 
 	/**
 	 * @brief Return magic hit chance
 	 */
-	int GetMagicToHit() const
-	{
-		return _pMagic + getPlayerCombatData().baseMagicToHit;
-	}
+	int GetMagicToHit() const;
 
 	/**
 	 * @brief Return block chance
 	 * @param useLevel - indicate if player's level should be added to block chance (the only case where it isn't is blocking a trap)
 	 */
-	int GetBlockChance(bool useLevel = true) const
-	{
-		int blkper = _pDexterity + getBaseToBlock();
-		if (useLevel)
-			blkper += getCharacterLevel() * 2;
-		return blkper;
-	}
+	int GetBlockChance(bool useLevel = true) const;
 
 	/**
 	 * @brief Return reciprocal of the factor for calculating damage reduction due to Mana Shield.
@@ -545,40 +415,14 @@ public:
 	 * @param spell SpellID enum member identifying the spell
 	 * @return effective spell level
 	 */
-	int GetSpellLevel(SpellID spell) const
-	{
-		if (spell == SpellID::Invalid || static_cast<std::size_t>(spell) >= sizeof(_pSplLvl)) {
-			return 0;
-		}
-
-		return std::max<int>(_pISplLvlAdd + _pSplLvl[static_cast<std::size_t>(spell)], 0);
-	}
+	int GetSpellLevel(SpellID spell) const;
 
 	/**
 	 * @brief Return monster armor value after including player's armor piercing % (hellfire only)
 	 * @param monsterArmor - monster armor before applying % armor pierce
 	 * @param isMelee - indicates if it's melee or ranged combat
 	 */
-	int CalculateArmorPierce(int monsterArmor, bool isMelee) const
-	{
-		int tmac = monsterArmor;
-		if (_pIEnAc > 0) {
-			if (gbIsHellfire) {
-				int pIEnAc = _pIEnAc - 1;
-				if (pIEnAc > 0)
-					tmac >>= pIEnAc;
-				else
-					tmac -= tmac / 4;
-			}
-			if (isMelee && _pClass == HeroClass::Barbarian) {
-				tmac -= monsterArmor / 8;
-			}
-		}
-		if (tmac < 0)
-			tmac = 0;
-
-		return tmac;
-	}
+	int CalculateArmorPierce(int monsterArmor, bool isMelee) const;
 
 	/**
 	 * @brief Calculates the players current Hit Points as a percentage of their max HP and stores it for later reference
@@ -587,30 +431,9 @@ public:
 	 * @see _pHPPer
 	 * @return The players current hit points as a percentage of their maximum (from 0 to 80%)
 	 */
-	int UpdateHitPointPercentage()
-	{
-		if (_pMaxHP <= 0) { // divide by zero guard
-			_pHPPer = 0;
-		} else {
-			// Maximum achievable HP is approximately 1200. Diablo uses fixed point integers where the last 6 bits are
-			// fractional values. This means that we will never overflow HP values normally by doing this multiplication
-			// as the max value is representable in 17 bits and the multiplication result will be at most 23 bits
-			_pHPPer = std::clamp(_pHitPoints * 81 / _pMaxHP, 0, 81); // hp should never be greater than maxHP but just in case
-		}
+	int UpdateHitPointPercentage();
 
-		return _pHPPer;
-	}
-
-	int UpdateManaPercentage()
-	{
-		if (_pMaxMana <= 0) {
-			_pManaPer = 0;
-		} else {
-			_pManaPer = std::clamp(_pMana * 81 / _pMaxMana, 0, 81);
-		}
-
-		return _pManaPer;
-	}
+	int UpdateManaPercentage();
 
 	/**
 	 * @brief Restores between 1/8 (inclusive) and 1/4 (exclusive) of the players max HP (further adjusted by class).
@@ -624,11 +447,7 @@ public:
 	/**
 	 * @brief Resets hp to maxHp
 	 */
-	void RestoreFullLife()
-	{
-		_pHitPoints = _pMaxHP;
-		_pHPBase = _pMaxHPBase;
-	}
+	void RestoreFullLife();
 
 	/**
 	 * @brief Restores between 1/8 (inclusive) and 1/4 (exclusive) of the players max Mana (further adjusted by class).
@@ -643,13 +462,7 @@ public:
 	/**
 	 * @brief Resets mana to maxMana (if the player can use magic)
 	 */
-	void RestoreFullMana()
-	{
-		if (HasNoneOf(_pIFlags, ItemSpecialEffect::NoMana)) {
-			_pMana = _pMaxMana;
-			_pManaBase = _pMaxManaBase;
-		}
-	}
+	void RestoreFullMana();
 	/**
 	 * @brief Sets the readied spell to the spell in the specified equipment slot. Does nothing if the item does not have a valid spell.
 	 * @param bodyLocation - the body location whose item will be checked for the spell.
@@ -660,25 +473,9 @@ public:
 	/**
 	 * @brief Does the player currently have a ranged weapon equipped?
 	 */
-	bool UsesRangedWeapon() const
-	{
-		return static_cast<PlayerWeaponGraphic>(_pgfxnum & 0xF) == PlayerWeaponGraphic::Bow;
-	}
+	bool UsesRangedWeapon() const;
 
-	bool CanChangeAction()
-	{
-		if (_pmode == PM_STAND)
-			return true;
-		if (_pmode == PM_ATTACK && AnimInfo.currentFrame >= _pAFNum)
-			return true;
-		if (_pmode == PM_RATTACK && AnimInfo.currentFrame >= _pAFNum)
-			return true;
-		if (_pmode == PM_SPELL && AnimInfo.currentFrame >= _pSFNum)
-			return true;
-		if (isWalking() && AnimInfo.isLastFrame())
-			return true;
-		return false;
-	}
+	bool CanChangeAction();
 
 	[[nodiscard]] player_graphic getGraphic() const;
 
@@ -686,17 +483,8 @@ public:
 
 	void getAnimationFramesAndTicksPerFrame(player_graphic graphics, int8_t &numberOfFrames, int8_t &ticksPerFrame) const;
 
-	[[nodiscard]] ClxSprite currentSprite() const
-	{
-		return previewCelSprite ? *previewCelSprite : AnimInfo.currentSprite();
-	}
-	[[nodiscard]] Displacement getRenderingOffset(const ClxSprite sprite) const
-	{
-		Displacement offset = { -CalculateSpriteTileCenterX(sprite.width()), 0 };
-		if (isWalking())
-			offset += GetOffsetForWalking(AnimInfo, _pdir);
-		return offset;
-	}
+	[[nodiscard]] ClxSprite currentSprite() const;
+	[[nodiscard]] Displacement getRenderingOffset(const ClxSprite sprite) const;
 
 	/**
 	 * @brief Updates previewCelSprite according to new requested command
@@ -707,10 +495,7 @@ public:
 	 */
 	void UpdatePreviewCelSprite(_cmd_id cmdId, Point point, uint16_t wParam1, uint16_t wParam2);
 
-	[[nodiscard]] uint8_t getCharacterLevel() const
-	{
-		return _pLevel;
-	}
+	[[nodiscard]] uint8_t getCharacterLevel() const;
 
 	/**
 	 * @brief Sets the character level to the target level or nearest valid value.
@@ -720,10 +505,7 @@ public:
 
 	[[nodiscard]] uint8_t getMaxCharacterLevel() const;
 
-	[[nodiscard]] bool isMaxCharacterLevel() const
-	{
-		return getCharacterLevel() >= getMaxCharacterLevel();
-	}
+	[[nodiscard]] bool isMaxCharacterLevel() const;
 
 private:
 	void _addExperience(uint32_t experience, int levelDelta);
@@ -752,38 +534,16 @@ public:
 	[[nodiscard]] uint32_t getNextExperienceThreshold() const;
 
 	/** @brief Checks if the player is on the same level as the local player (MyPlayer). */
-	bool isOnActiveLevel() const
-	{
-		if (setlevel)
-			return isOnLevel(setlvlnum);
-		return isOnLevel(currlevel);
-	}
+	bool isOnActiveLevel() const;
 
 	/** @brief Checks if the player is on the corresponding level. */
-	bool isOnLevel(uint8_t level) const
-	{
-		return !this->plrIsOnSetLevel && this->plrlevel == level;
-	}
+	bool isOnLevel(uint8_t level) const;
 	/** @brief Checks if the player is on the corresponding level. */
-	bool isOnLevel(_setlevels level) const
-	{
-		return this->plrIsOnSetLevel && this->plrlevel == static_cast<uint8_t>(level);
-	}
+	bool isOnLevel(_setlevels level) const;
 	/** @brief Checks if the player is on a arena level. */
-	bool isOnArenaLevel() const
-	{
-		return plrIsOnSetLevel && IsArenaLevel(static_cast<_setlevels>(plrlevel));
-	}
-	void setLevel(uint8_t level)
-	{
-		this->plrlevel = level;
-		this->plrIsOnSetLevel = false;
-	}
-	void setLevel(_setlevels level)
-	{
-		this->plrlevel = static_cast<uint8_t>(level);
-		this->plrIsOnSetLevel = true;
-	}
+	bool isOnArenaLevel() const;
+	void setLevel(uint8_t level);
+	void setLevel(_setlevels level);
 
 	/** @brief Returns a character's life based on starting life, character level, and base vitality. */
 	int32_t calculateBaseLife() const;
@@ -802,36 +562,12 @@ public:
 	bool isLevelOwnedByLocalClient() const;
 
 	/** @brief Checks if the player is holding an item of the provided type, and is usable. */
-	bool isHoldingItem(const ItemType type) const
-	{
-		const Item &leftHandItem = InvBody[INVLOC_HAND_LEFT];
-		const Item &rightHandItem = InvBody[INVLOC_HAND_RIGHT];
+	bool isHoldingItem(const ItemType type) const;
 
-		return (type == leftHandItem._itype && leftHandItem._iStatFlag) || (type == rightHandItem._itype && rightHandItem._iStatFlag);
-	}
+	bool hasNoLife() const;
 
-	bool hasNoLife() const
-	{
-		return leveltype == DTYPE_TOWN ? false : _pHitPoints >> 6 <= 0;
-	}
-
-	bool hasNoMana() const
-	{
-		return _pMana >> 6 <= 0;
-	}
+	bool hasNoMana() const;
 };
-
-extern DVL_API_FOR_TEST uint8_t MyPlayerId;
-extern DVL_API_FOR_TEST Player *MyPlayer;
-extern DVL_API_FOR_TEST std::vector<Player> Players;
-/** @brief What Player items and stats should be displayed? Normally this is identical to MyPlayer but can differ when /inspect was used. */
-extern Player *InspectPlayer;
-/** @brief Do we currently inspect a remote player (/inspect was used)? In this case the (remote) players items and stats can't be modified. */
-inline bool IsInspectingPlayer()
-{
-	return MyPlayer != InspectPlayer;
-}
-extern bool MyPlayerIsDead;
 
 Player *PlayerAtPosition(Point position, bool ignoreMovingPlayers = false);
 

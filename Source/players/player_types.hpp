@@ -7,6 +7,59 @@ namespace devilution {
 
 constexpr int PlayerNameLength = 32;
 
+/** Walking directions */
+enum {
+	// clang-format off
+	WALK_NE   =  1,
+	WALK_NW   =  2,
+	WALK_SE   =  3,
+	WALK_SW   =  4,
+	WALK_N    =  5,
+	WALK_E    =  6,
+	WALK_S    =  7,
+	WALK_W    =  8,
+	WALK_NONE = -1,
+	// clang-format on
+};
+
+enum PLR_MODE : uint8_t {
+	PM_STAND,
+	PM_WALK_NORTHWARDS,
+	PM_WALK_SOUTHWARDS,
+	PM_WALK_SIDEWAYS,
+	PM_ATTACK,
+	PM_RATTACK,
+	PM_BLOCK,
+	PM_GOTHIT,
+	PM_DEATH,
+	PM_SPELL,
+	PM_NEWLVL,
+	PM_QUIT,
+};
+
+enum action_id : int8_t {
+	// clang-format off
+	ACTION_WALK        = -2, // Automatic walk when using gamepad
+	ACTION_NONE        = -1,
+	ACTION_ATTACK      = 9,
+	ACTION_RATTACK     = 10,
+	ACTION_SPELL       = 12,
+	ACTION_OPERATE     = 13,
+	ACTION_DISARM      = 14,
+	ACTION_PICKUPITEM  = 15, // put item in hand (inventory screen open)
+	ACTION_PICKUPAITEM = 16, // put item in inventory
+	ACTION_TALK        = 17,
+	ACTION_OPERATETK   = 18, // operate via telekinesis
+	ACTION_ATTACKMON   = 20,
+	ACTION_ATTACKPLR   = 21,
+	ACTION_RATTACKMON  = 22,
+	ACTION_RATTACKPLR  = 23,
+	ACTION_SPELLMON    = 24,
+	ACTION_SPELLPLR    = 25,
+	ACTION_SPELLWALL   = 26,
+	// clang-format on
+};
+
 enum class player_graphic : uint8_t {
 	Stand,
 	Walk,

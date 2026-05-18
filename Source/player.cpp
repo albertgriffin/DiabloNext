@@ -69,6 +69,11 @@ std::vector<Player> Players;
 Player *InspectPlayer;
 bool MyPlayerIsDead;
 
+size_t PlayersCount()
+{
+	return Players.size();
+}
+
 void Player::UpdatePreviewCelSprite(_cmd_id cmdId, Point point, uint16_t wParam1, uint16_t wParam2)
 {
 	// if game is not running don't show a preview
