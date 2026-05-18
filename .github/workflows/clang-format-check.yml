@@ -4,14 +4,9 @@ on:
   push:
     branches:
       - master
-    paths-ignore:
-      - '*.md'
-      - 'docs/**'
   pull_request:
-    types: [ opened, synchronize ]
-    paths-ignore:
-      - '*.md'
-      - 'docs/**'
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -19,7 +14,9 @@ concurrency:
 
 jobs:
   formatting-check:
+    name: clang-format check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - name: Checkout
       uses: actions/checkout@v6
