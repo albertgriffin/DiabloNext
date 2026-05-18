@@ -831,6 +831,21 @@ std::vector<OptionEntryBase *> GraphicsOptions::GetEntries()
 	// clang-format on
 }
 
+ExperimentalOptions::ExperimentalOptions()
+    : OptionCategoryBase("Experimental", N_("Experimental"), N_("Experimental Settings"))
+    , renderFrameCompositor("Render Frame Compositor", OptionEntryFlags::CantChangeInGame | OptionEntryFlags::RecreateUI, N_("Render Frame Compositor"), N_("Use the experimental final frame compositor path."), false)
+    , renderFrameCompositorDiagnosticTransform("Render Compositor Diagnostic Transform", OptionEntryFlags::None, N_("Render Compositor Diagnostic Transform"), N_("Apply a visible RGB transform after palette expansion to verify the experimental compositor path."), false)
+{
+}
+
+std::vector<OptionEntryBase *> ExperimentalOptions::GetEntries()
+{
+	return {
+		&renderFrameCompositor,
+		&renderFrameCompositorDiagnosticTransform,
+	};
+}
+
 GameplayOptions::GameplayOptions()
     : OptionCategoryBase("Game", N_("Gameplay"), N_("Gameplay Settings"))
     , tickRate("Speed", OptionEntryFlags::Invisible, "Speed", "Gameplay ticks per second.", 20)

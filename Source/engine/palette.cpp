@@ -35,6 +35,14 @@ namespace devilution {
 
 std::array<SDL_Color, 256> logical_palette;
 std::array<SDL_Color, 256> system_palette;
+namespace {
+uint64_t systemPaletteVersion;
+}
+
+uint64_t SystemPaletteVersion()
+{
+	return systemPaletteVersion;
+}
 
 namespace {
 
@@ -158,6 +166,8 @@ void UpdateSystemPalette(std::span<const SDL_Color, 256> src)
 
 void SystemPaletteUpdated(int first, int ncolor)
 {
+	systemPaletteVersion++;
+
 	if (HeadlessMode)
 		return;
 

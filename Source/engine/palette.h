@@ -73,6 +73,8 @@ extern std::array<SDL_Color, 256> logical_palette;
  */
 extern std::array<SDL_Color, 256> system_palette;
 
+[[nodiscard]] uint64_t SystemPaletteVersion();
+
 void palette_init();
 
 /**
