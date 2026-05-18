@@ -537,7 +537,7 @@ bool base_protocol<P>::is_recognized(endpoint_t sender)
 	if (sender == firstpeer)
 		return true;
 
-	for (auto player = 0; player <= MAX_PLRS; player++) {
+	for (auto player = 0; player < MAX_PLRS; player++) {
 		if (sender == peers[player].endpoint)
 			return true;
 	}

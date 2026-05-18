@@ -10,6 +10,7 @@
 #endif
 
 #include "cursor.h"
+#include "diablo.h"
 #include "diablo_msg.hpp"
 #include "engine/backbuffer_state.hpp"
 #include "engine/demomode.h"
@@ -19,10 +20,12 @@
 #include "game_mode.hpp"
 #include "gmenu.h"
 #include "headless_mode.hpp"
+#include "interfac.h"
 #include "loadsave.h"
 #include "multi.h"
 #include "options.h"
 #include "pfile.h"
+#include "player.h"
 #include "qol/floatingnumbers.h"
 #include "utils/language.h"
 

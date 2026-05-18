@@ -33,6 +33,7 @@
 #include "monsters/validation.hpp"
 #include "mpq/mpq_common.hpp"
 #include "pfile.h"
+#include "player.h"
 #include "players/animation.hpp"
 #include "players/lifecycle.hpp"
 #include "plrmsg.h"

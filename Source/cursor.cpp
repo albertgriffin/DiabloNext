@@ -38,6 +38,7 @@
 #include "levels/trigs.h"
 #include "missiles.h"
 #include "options.h"
+#include "player.h"
 #include "qol/itemlabels.h"
 #include "qol/stash.h"
 #include "qol/visual_store.h"

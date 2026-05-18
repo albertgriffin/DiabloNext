@@ -47,6 +47,7 @@
 #include "engine/backbuffer_state.hpp"
 #include "engine/dx.h"
 #include "headless_mode.hpp"
+#include "interfac.h"
 #include "options.h"
 #include "utils/log.hpp"
 #include "utils/sdl_compat.h"

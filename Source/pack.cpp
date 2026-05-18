@@ -12,6 +12,7 @@
 #include "inv.h"
 #include "items/validation.h"
 #include "loadsave.h"
+#include "player.h"
 #include "players/lifecycle.hpp"
 #include "players/movement.hpp"
 #include "plrmsg.h"

@@ -19,10 +19,12 @@
 
 #include "controls/control_mode.hpp"
 #include "controls/plrctrls.h"
+#include "diablo.h"
 #include "engine/events.hpp"
 #include "game_mode.hpp"
 #include "gmenu.h"
 #include "headless_mode.hpp"
+#include "interfac.h"
 #include "menu.h"
 #include "nthread.h"
 #include "options.h"

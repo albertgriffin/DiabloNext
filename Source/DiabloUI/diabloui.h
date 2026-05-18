@@ -17,7 +17,9 @@
 #include "DiabloUI/ui_item.h"
 #include "engine/clx_sprite.hpp"
 #include "engine/load_pcx.hpp" // IWYU pragma: export
-#include "player.h"
+#include "levels/gendung.h"
+#include "multi.h"
+#include "tables/playerdat.hpp"
 #include "utils/display.h"
 
 namespace devilution {

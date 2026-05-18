@@ -88,6 +88,7 @@
 #include "panels/spell_book.hpp"
 #include "panels/spell_list.hpp"
 #include "pfile.h"
+#include "player.h"
 #include "players/actions.hpp"
 #include "players/animation.hpp"
 #include "players/lifecycle.hpp"
