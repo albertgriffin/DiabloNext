@@ -15,7 +15,15 @@
 #define DEVILUTIONX_LEGACY_WINDOWS_9X 0
 #endif
 
-#if !defined(__DJGPP__) && !defined(__EMSCRIPTEN__) && !defined(__amigaos__) && !DEVILUTIONX_LEGACY_WINDOWS_9X
+#if defined(__DJGPP__) || defined(__EMSCRIPTEN__) || defined(__amigaos__) || defined(__UWP__) \
+    || defined(__3DS__) || defined(__SWITCH__) || defined(__vita__) || defined(__ORBIS__)     \
+    || defined(__PROSPERO__) || defined(NXDK) || DEVILUTIONX_LEGACY_WINDOWS_9X
+#define DEVILUTIONX_PARALLEL_COMPOSITION 0
+#else
+#define DEVILUTIONX_PARALLEL_COMPOSITION 1
+#endif
+
+#if DEVILUTIONX_PARALLEL_COMPOSITION
 #include <thread>
 #endif
 
@@ -33,12 +41,6 @@
 #include "options.h"
 #include "utils/display.h"
 #include "utils/sdl_compat.h"
-
-#if !defined(__DJGPP__) && !defined(__EMSCRIPTEN__) && !defined(__amigaos__) && !DEVILUTIONX_LEGACY_WINDOWS_9X
-#define DEVILUTIONX_PARALLEL_COMPOSITION 1
-#else
-#define DEVILUTIONX_PARALLEL_COMPOSITION 0
-#endif
 
 namespace devilution {
 namespace {
