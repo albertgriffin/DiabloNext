@@ -8,17 +8,21 @@
 #include <cstdint>
 #include <list>
 #include <optional>
+#include <type_traits>
 
+#include "engine/clx_sprite.hpp"
+#include "engine/direction.hpp"
 #include "engine/displacement.hpp"
 #include "engine/point.hpp"
 #include "engine/world_tile.hpp"
-#include "monster.h"
-#include "player.h"
+#include "players/player_types.hpp"
 #include "tables/misdat.h"
 #include "tables/spelldat.h"
-#include "utils/is_of.hpp"
 
 namespace devilution {
+
+struct Monster;
+struct Player;
 
 constexpr WorldTilePosition GolemHoldingCell = Point { 1, 0 };
 
@@ -143,33 +147,13 @@ public:
 		return _misource == -1;
 	}
 
-	[[nodiscard]] Player *sourcePlayer()
-	{
-		if (IsNoneOf(_micaster, TARGET_BOTH, TARGET_MONSTERS) || _misource == -1)
-			return nullptr;
-		return &Players[_misource];
-	}
+	[[nodiscard]] Player *sourcePlayer();
 
-	[[nodiscard]] Monster *sourceMonster()
-	{
-		if (_micaster != TARGET_PLAYERS || _misource == -1)
-			return nullptr;
-		return &Monsters[_misource];
-	}
+	[[nodiscard]] Monster *sourceMonster();
 
-	[[nodiscard]] bool isSameSource(Missile &missile)
-	{
-		return sourceType() == missile.sourceType() && _misource == missile._misource;
-	}
+	[[nodiscard]] bool isSameSource(Missile &missile);
 
-	MissileSource sourceType()
-	{
-		if (_misource == -1)
-			return MissileSource::Trap;
-		if (_micaster == TARGET_PLAYERS)
-			return MissileSource::Monster;
-		return MissileSource::Player;
-	}
+	MissileSource sourceType();
 
 	void setAnimation(MissileGraphicID animtype);
 
@@ -428,18 +412,12 @@ void AddDiabloApocalypse(Missile &missile, AddMissileParameter &parameter);
 Missile *AddMissile(WorldTilePosition src, WorldTilePosition dst, Direction midir, MissileID mitype,
     mienemy_type micaster, int id, int midam, int spllvl,
     Missile *parent = nullptr, std::optional<SfxID> lSFX = std::nullopt);
-inline Missile *AddMissile(WorldTilePosition src, WorldTilePosition dst, Direction midir, MissileID mitype,
+Missile *AddMissile(WorldTilePosition src, WorldTilePosition dst, Direction midir, MissileID mitype,
     mienemy_type micaster, const Player &player, int midam, int spllvl,
-    Missile *parent = nullptr, std::optional<SfxID> lSFX = std::nullopt)
-{
-	return AddMissile(src, dst, midir, mitype, micaster, player.getId(), midam, spllvl, parent, lSFX);
-}
-inline Missile *AddMissile(WorldTilePosition src, WorldTilePosition dst, Direction midir, MissileID mitype,
+    Missile *parent = nullptr, std::optional<SfxID> lSFX = std::nullopt);
+Missile *AddMissile(WorldTilePosition src, WorldTilePosition dst, Direction midir, MissileID mitype,
     mienemy_type micaster, const Monster &monster, int midam, int spllvl,
-    Missile *parent = nullptr, std::optional<SfxID> lSFX = std::nullopt)
-{
-	return AddMissile(src, dst, midir, mitype, micaster, static_cast<int>(monster.getId()), midam, spllvl, parent, lSFX);
-}
+    Missile *parent = nullptr, std::optional<SfxID> lSFX = std::nullopt);
 void ProcessElementalArrow(Missile &missile);
 void ProcessArrow(Missile &missile);
 void ProcessGenericProjectile(Missile &missile);

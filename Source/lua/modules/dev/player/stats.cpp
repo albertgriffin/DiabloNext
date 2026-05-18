@@ -8,6 +8,8 @@
 #include "engine/backbuffer_state.hpp"
 #include "lua/metadoc.hpp"
 #include "player.h"
+#include "players/death.hpp"
+#include "players/progression.hpp"
 #include "utils/str_cat.hpp"
 
 namespace devilution {

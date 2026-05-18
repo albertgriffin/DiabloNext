@@ -19,6 +19,7 @@
 #include <config.h>
 
 #include "DiabloUI/diabloui.h"
+#include "diablo.h"
 #include "engine/assets.hpp"
 #include "engine/backbuffer_state.hpp"
 #include "engine/dx.h"

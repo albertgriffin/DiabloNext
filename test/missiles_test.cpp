@@ -5,6 +5,7 @@
 
 #include "engine/random.hpp"
 #include "missiles.h"
+#include "player.h"
 
 using namespace devilution;
 using ::testing::AllOf;

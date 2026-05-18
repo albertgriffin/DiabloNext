@@ -9,11 +9,13 @@
 
 #include <expected.hpp>
 
+#include "items.h"
 #include "pfile.h"
-#include "player.h"
 #include "utils/attributes.h"
 
 namespace devilution {
+
+struct Player;
 
 extern DVL_API_FOR_TEST bool gbIsHellfireSaveGame;
 extern DVL_API_FOR_TEST uint8_t giNumberOfLevels;

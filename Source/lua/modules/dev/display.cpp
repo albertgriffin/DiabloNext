@@ -10,7 +10,7 @@
 #include "debug.h"
 #include "lighting.h"
 #include "lua/metadoc.hpp"
-#include "player.h"
+#include "players/lifecycle.hpp"
 #include "utils/str_cat.hpp"
 
 namespace devilution {

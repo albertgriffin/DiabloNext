@@ -23,6 +23,7 @@
 #include "control/control.hpp"
 #include "controls/axis_direction.h"
 #include "controls/controller_motion.h"
+#include "diablo.h"
 #include "engine/clx_sprite.hpp"
 #include "engine/demomode.h"
 #include "engine/load_cel.hpp"

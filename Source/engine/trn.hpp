@@ -5,12 +5,13 @@
  */
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 
-#include "player.h"
-
 namespace devilution {
+
+struct Player;
 
 uint8_t *GetInfravisionTRN();
 uint8_t *GetStoneTRN();

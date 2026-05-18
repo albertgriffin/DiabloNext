@@ -18,6 +18,7 @@
 #include "inv.h"
 #include "panels/spell_book.hpp"
 #include "panels/spell_list.hpp"
+#include "player.h"
 #include "qol/stash.h"
 #include "stores.h"
 #include "utils/is_of.hpp"

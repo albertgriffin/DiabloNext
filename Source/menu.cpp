@@ -15,6 +15,7 @@
 
 #include "DiabloUI/diabloui.h"
 #include "DiabloUI/settingsmenu.h"
+#include "diablo.h"
 #include "engine/assets.hpp"
 #include "engine/demomode.h"
 #include "game_mode.hpp"

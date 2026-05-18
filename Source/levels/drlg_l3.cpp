@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "diablo.h"
 #include "engine/load_file.hpp"
 #include "engine/points_in_rectangle_range.hpp"
 #include "engine/random.hpp"
@@ -11,7 +12,6 @@
 #include "lighting.h"
 #include "monster.h"
 #include "objects.h"
-#include "player.h"
 #include "quests.h"
 #include "tables/objdat.h"
 #include "utils/is_of.hpp"

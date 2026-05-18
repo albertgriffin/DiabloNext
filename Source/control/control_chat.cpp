@@ -3,11 +3,13 @@
 #include "control_panel.hpp"
 
 #include "control/control_chat_commands.hpp"
+#include "diablo.h"
 #include "engine/backbuffer_state.hpp"
 #include "engine/render/clx_render.hpp"
 #include "options.h"
 #include "panels/console.hpp"
 #include "panels/mainpanel.hpp"
+#include "player.h"
 #include "quick_messages.hpp"
 #include "utils/display.h"
 #include "utils/sdl_compat.h"

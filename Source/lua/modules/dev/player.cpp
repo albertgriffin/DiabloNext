@@ -13,6 +13,8 @@
 #include "lua/modules/dev/player/spells.hpp"
 #include "lua/modules/dev/player/stats.hpp"
 #include "player.h"
+#include "players/animation.hpp"
+#include "players/movement.hpp"
 
 namespace devilution {
 

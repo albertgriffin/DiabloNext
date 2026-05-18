@@ -8,6 +8,7 @@
 
 #include "lua/metadoc.hpp"
 #include "msg.h"
+#include "player.h"
 #include "spells.h"
 #include "tables/spelldat.h"
 #include "utils/str_cat.hpp"

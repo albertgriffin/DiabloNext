@@ -6,6 +6,7 @@
 #include "engine/assets.hpp"
 #include "game_mode.hpp"
 #include "pack.h"
+#include "player.h"
 #include "tables/monstdat.h"
 #include "tables/playerdat.hpp"
 #include "utils/endian_swap.hpp"

@@ -26,6 +26,10 @@
 #include "levels/dun_tile.hpp"
 #include "levels/gendung.h"
 #include "multi.h"
+#include "players/inventory_types.hpp"
+#include "players/player_types.hpp"
+#include "players/spell_types.hpp"
+#include "players/stat_types.hpp"
 #include "tables/playerdat.hpp"
 #include "tables/spelldat.h"
 #include "utils/attributes.h"
@@ -33,14 +37,6 @@
 #include "utils/is_of.hpp"
 
 namespace devilution {
-
-constexpr int InventoryGridCells = 80;
-constexpr int MaxBeltItems = 8;
-constexpr int MaxResistance = 75;
-constexpr uint8_t MaxSpellLevel = 15;
-constexpr int PlayerNameLength = 32;
-
-constexpr size_t NumHotkeys = 12;
 
 /** Walking directions */
 enum {
@@ -55,54 +51,6 @@ enum {
 	WALK_W    =  8,
 	WALK_NONE = -1,
 	// clang-format on
-};
-
-enum class CharacterAttribute : uint8_t {
-	Strength,
-	Magic,
-	Dexterity,
-	Vitality,
-
-	FIRST = Strength,
-	LAST = Vitality
-};
-
-// Logical equipment locations
-enum inv_body_loc : uint8_t {
-	INVLOC_HEAD,
-	INVLOC_RING_LEFT,
-	INVLOC_RING_RIGHT,
-	INVLOC_AMULET,
-	INVLOC_HAND_LEFT,
-	INVLOC_HAND_RIGHT,
-	INVLOC_CHEST,
-	NUM_INVLOC,
-};
-
-enum class player_graphic : uint8_t {
-	Stand,
-	Walk,
-	Attack,
-	Hit,
-	Lightning,
-	Fire,
-	Magic,
-	Death,
-	Block,
-
-	LAST = Block
-};
-
-enum class PlayerWeaponGraphic : uint8_t {
-	Unarmed,
-	UnarmedShield,
-	Sword,
-	SwordShield,
-	Bow,
-	Axe,
-	Mace,
-	MaceShield,
-	Staff,
 };
 
 enum PLR_MODE : uint8_t {
@@ -141,46 +89,6 @@ enum action_id : int8_t {
 	ACTION_SPELLPLR    = 25,
 	ACTION_SPELLWALL   = 26,
 	// clang-format on
-};
-
-enum class SpellFlag : uint8_t {
-	// clang-format off
-	None         = 0,
-	Etherealize  = 1 << 0,
-	RageActive   = 1 << 1,
-	RageCooldown = 1 << 2,
-	// bits 3-7 are unused
-	// clang-format on
-};
-use_enum_as_flags(SpellFlag);
-
-/* @brief When the player dies, what is the reason/source why? */
-enum class DeathReason {
-	/* @brief Monster or Trap (dungeon) */
-	MonsterOrTrap,
-	/* @brief Other player or selfkill (for example firewall) */
-	Player,
-	/* @brief HP is zero but we don't know when or where this happened */
-	Unknown,
-};
-
-/** Maps from armor animation to letter used in graphic files. */
-constexpr std::array<char, 3> ArmourChar = {
-	'l', // light
-	'm', // medium
-	'h', // heavy
-};
-/** Maps from weapon animation to letter used in graphic files. */
-constexpr std::array<char, 9> WepChar = {
-	'n', // unarmed
-	'u', // no weapon + shield
-	's', // sword + no shield
-	'd', // sword + shield
-	'b', // bow
-	'a', // axe
-	'm', // blunt + no shield
-	'h', // blunt + shield
-	't', // staff
 };
 
 /**
@@ -927,76 +835,10 @@ extern bool MyPlayerIsDead;
 
 Player *PlayerAtPosition(Point position, bool ignoreMovingPlayers = false);
 
-/**
- * @brief Get the players current portrait sprite which is used for the party panel.
- * @param player
- */
-ClxSprite GetPlayerPortraitSprite(Player &player);
-bool IsPlayerUnarmed(Player &player);
-
-void LoadPlrGFX(Player &player, player_graphic graphic);
-void InitPlayerGFX(Player &player);
-void ResetPlayerGFX(Player &player);
-
-/**
- * @brief Sets the new Player Animation with all relevant information for rendering
- * @param player The player to set the animation for
- * @param graphic What player animation should be displayed
- * @param dir Direction of the animation
- * @param numberOfFrames Number of Frames in Animation
- * @param delayLen Delay after each Animation sequence
- * @param flags Specifies what special logics are applied to this Animation
- * @param numSkippedFrames Number of Frames that will be skipped (for example with modifier "faster attack")
- * @param distributeFramesBeforeFrame Distribute the numSkippedFrames only before this frame
- */
-void NewPlrAnim(Player &player, player_graphic graphic, Direction dir, AnimationDistributionFlags flags = AnimationDistributionFlags::None, int8_t numSkippedFrames = 0, int8_t distributeFramesBeforeFrame = 0);
-void SetPlrAnims(Player &player);
-void CreatePlayer(Player &player, HeroClass c);
-int CalcStatDiff(Player &player);
-#ifdef _DEBUG
-void NextPlrLevel(Player &player);
-#endif
-void AddPlrMonstExper(int lvl, unsigned int exp, char pmask);
-void ApplyPlrDamage(DamageType damageType, Player &player, int dam, int minHP = 0, int frac = 0, DeathReason deathReason = DeathReason::MonsterOrTrap);
-void InitPlayer(Player &player, bool FirstTime);
-void InitMultiView();
 void PlrClrTrans(Point position);
 void PlrDoTrans(Point position);
-void SetPlayerOld(Player &player);
-bool PlayerIsInCombat(const Player &player);
-void FixPlayerLocation(Player &player, Direction bDir);
-void StartStand(Player &player, Direction dir);
-void StartPlrBlock(Player &player, Direction dir);
-void FixPlrWalkTags(const Player &player);
-void StartPlrHit(Player &player, int dam, bool forcehit);
-void StartPlayerKill(Player &player, DeathReason deathReason);
-/**
- * @brief Strip the top off gold piles that are larger than MaxGold
- */
-void StripTopGold(Player &player);
-void SyncPlrKill(Player &player, DeathReason deathReason);
 void RemovePlrMissiles(const Player &player);
-void StartNewLvl(Player &player, interface_mode fom, int lvl);
-void RestartTownLvl(Player &player);
-void StartWarpLvl(Player &player, size_t pidx);
-void ProcessPlayers();
-void ClrPlrPath(Player &player);
-bool PosOkPlayer(const Player &player, Point position);
-void MakePlrPath(Player &player, Point targetPosition, bool endspace);
-void CheckPlrSpell(bool isShiftHeld, SpellID spellID = MyPlayer->_pRSpell, SpellType spellType = MyPlayer->_pRSplType);
-void SyncPlrAnim(Player &player);
-void SyncInitPlrPos(Player &player);
-void SyncInitPlr(Player &player);
-void CheckStats(Player &player);
-void ModifyPlrStr(Player &player, int l);
-void ModifyPlrMag(Player &player, int l);
-void ModifyPlrDex(Player &player, int l);
-void ModifyPlrVit(Player &player, int l);
 void SetPlayerHitPoints(Player &player, int val);
-void SetPlrStr(Player &player, int v);
-void SetPlrMag(Player &player, int v);
-void SetPlrDex(Player &player, int v);
-void SetPlrVit(Player &player, int v);
 void InitDungMsgs(Player &player);
 void PlayDungMsgs();
 

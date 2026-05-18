@@ -21,6 +21,7 @@
 #include "engine/render/primitive_render.hpp"
 #include "engine/render/text_render.hpp"
 #include "inv.h"
+#include "player.h"
 #include "qol/chatlog.h"
 #include "qol/stash.h"
 #include "utils/algorithm/container.hpp"

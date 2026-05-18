@@ -27,6 +27,7 @@
 #include "utils/log.hpp"
 #include "utils/paths.h"
 #include "utils/string_view_hash.hpp"
+#include "utils/ui_fwd.h"
 
 #define MO_MAGIC 0x950412de
 

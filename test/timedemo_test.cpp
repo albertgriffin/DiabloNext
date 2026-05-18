@@ -8,6 +8,7 @@
 #include <SDL.h>
 #endif
 
+#include "diablo.h"
 #include "engine/assets.hpp"
 #include "engine/demomode.h"
 #include "game_mode.hpp"
@@ -16,6 +17,7 @@
 #include "lua/lua_global.hpp"
 #include "options.h"
 #include "pfile.h"
+#include "player.h"
 #include "tables/monstdat.h"
 #include "tables/playerdat.hpp"
 #include "utils/display.h"

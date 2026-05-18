@@ -8,6 +8,9 @@
 #include "levels/gendung.h"
 #include "monster.h"
 #include "multi.h"
+#include "players/combat.hpp"
+#include "players/death.hpp"
+#include "players/lifecycle.hpp"
 #include "tables/playerdat.hpp"
 
 using namespace devilution;

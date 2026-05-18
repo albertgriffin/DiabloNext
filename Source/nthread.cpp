@@ -19,6 +19,7 @@
 #include "engine/demomode.h"
 #include "game_mode.hpp"
 #include "gmenu.h"
+#include "player.h"
 #include "storm/storm_net.hpp"
 #include "utils/sdl_mutex.h"
 #include "utils/sdl_thread.h"

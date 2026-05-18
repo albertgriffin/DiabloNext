@@ -17,7 +17,7 @@
 #include "engine/size.hpp"
 #include "levels/gendung.h"
 #include "levels/setmaps.h"
-#include "player.h"
+#include "objects.h"
 #include "quests.h"
 #include "utils/is_of.hpp"
 

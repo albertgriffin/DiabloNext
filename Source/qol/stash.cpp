@@ -26,6 +26,7 @@
 #include "hwcursor.hpp"
 #include "inv.h"
 #include "minitext.h"
+#include "player.h"
 #include "stores.h"
 #include "utils/display.h"
 #include "utils/format_int.hpp"

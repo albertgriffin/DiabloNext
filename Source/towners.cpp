@@ -12,6 +12,8 @@
 #include "game_mode.hpp"
 #include "inv.h"
 #include "minitext.h"
+#include "player.h"
+#include "players/item_iterators.hpp"
 #include "stores.h"
 #include "tables/textdat.h"
 #include "tables/townerdat.hpp"

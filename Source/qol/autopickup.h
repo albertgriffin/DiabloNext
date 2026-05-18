@@ -6,9 +6,9 @@
 
 #pragma once
 
-#include "player.h"
-
 namespace devilution {
+
+struct Player;
 
 void AutoPickup(const Player &player);
 
