@@ -39,6 +39,7 @@ set(tests
   writehero_test
   vendor_test
   frame_compositor_test
+  render_layer_test
   panel_state_test
   store_transaction_test
   visual_store_test

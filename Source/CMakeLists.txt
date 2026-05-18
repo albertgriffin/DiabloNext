@@ -235,6 +235,7 @@ target_link_dependencies(libdevilutionx_clx_render PUBLIC
   fmt::fmt
   libdevilutionx_light_render
   libdevilutionx_palette_blending
+  libdevilutionx_surface
   libdevilutionx_strings
 )
 
@@ -335,6 +336,7 @@ target_link_libraries(libdevilutionx_endian_write INTERFACE
 )
 
 add_devilutionx_object_library(libdevilutionx_surface
+  engine/render/render_layer.cpp
   engine/surface.cpp
 )
 target_link_dependencies(libdevilutionx_surface PUBLIC

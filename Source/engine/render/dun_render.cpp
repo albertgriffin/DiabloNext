@@ -18,6 +18,7 @@
 #include "appfat.h"
 #include "engine/point.hpp"
 #include "engine/render/blit_impl.hpp"
+#include "engine/render/render_layer.hpp"
 #include "levels/dun_tile.hpp"
 #include "options.h"
 #include "utils/attributes.h"
@@ -199,6 +200,7 @@ DVL_ALWAYS_INLINE DVL_ATTRIBUTE_HOT void RenderLineTransparentOrOpaque(uint8_t *
 	} else {
 		RenderLineOpaque<Light>(dst, src, width, tbl, lightmap);
 	}
+	MarkRenderLayerSpan(dst, static_cast<int>(width));
 }
 
 template <LightType Light, bool OpaqueFirst>
@@ -211,6 +213,7 @@ DVL_ALWAYS_INLINE DVL_ATTRIBUTE_HOT void RenderLineTransparentAndOpaque(uint8_t 
 		RenderLineTransparent<Light>(dst, src, prefixWidth, tbl, &lightmap);
 		RenderLineOpaque<Light>(dst + prefixWidth, src + prefixWidth, width - prefixWidth, tbl, &lightmap);
 	}
+	MarkRenderLayerSpan(dst, static_cast<int>(width));
 }
 
 template <LightType Light, MaskType Mask>
@@ -225,12 +228,14 @@ DVL_ALWAYS_INLINE DVL_ATTRIBUTE_HOT void RenderLine(uint8_t *DVL_RESTRICT dst, c
 		} else {
 			RenderLineTransparent<Light>(dst, src, n, tbl, &lightmap);
 		}
+		MarkRenderLayerSpan(dst, static_cast<int>(n));
 	} else if (prefix <= 0) {
 		if constexpr (Mask == MaskType::Left) {
 			RenderLineOpaque<Light>(dst, src, n, tbl, &lightmap);
 		} else {
 			RenderLineTransparent<Light>(dst, src, n, tbl, &lightmap);
 		}
+		MarkRenderLayerSpan(dst, static_cast<int>(n));
 	} else {
 		RenderLineTransparentAndOpaque<Light, /*OpaqueFirst=*/Mask == MaskType::Right>(dst, src, prefix, n, tbl, lightmap);
 	}
@@ -468,6 +473,7 @@ DVL_ALWAYS_INLINE DVL_ATTRIBUTE_HOT void RenderTriangleLower<LightType::FullyDar
 	unsigned width = XStep;
 	for (unsigned i = 0; i < LowerHeight; ++i) {
 		BlitFillDirect(dst, width, 0);
+		MarkRenderLayerSpan(dst, static_cast<int>(width));
 		dst -= dstLineOffset;
 		width += XStep;
 	}
@@ -500,6 +506,7 @@ DVL_ALWAYS_INLINE DVL_ATTRIBUTE_HOT void RenderTriangleUpper<LightType::FullyDar
 	unsigned width = Width - XStep;
 	for (unsigned i = 0; i < TriangleUpperHeight; ++i) {
 		BlitFillDirect(dst, width, 0);
+		MarkRenderLayerSpan(dst, static_cast<int>(width));
 		dst -= dstLineOffset;
 		width -= XStep;
 	}
@@ -752,7 +759,7 @@ DVL_ALWAYS_INLINE DVL_ATTRIBUTE_HOT void RenderTrapezoidUpperHalf(uint8_t *DVL_R
 		// The first line is always fully opaque.
 		// We handle it specially to avoid calling the blitter with width=0.
 		const uint8_t *srcEnd = src + (Width * TrapezoidUpperHeight);
-		RenderLineOpaque<Light>(dst, src, Width, tbl, &lightmap);
+		RenderLineTransparentOrOpaque<Light, /*Transparent=*/false>(dst, src, Width, tbl, &lightmap);
 		src += Width;
 		dst -= dstPitch;
 		uint8_t prefixWidth = (PrefixIncrement<Mask> < 0 ? 32 : 0) + PrefixIncrement<Mask>;

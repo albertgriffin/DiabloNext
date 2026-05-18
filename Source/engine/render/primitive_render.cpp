@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "engine/point.hpp"
+#include "engine/render/render_layer.hpp"
 #include "engine/size.hpp"
 #include "engine/surface.hpp"
 #include "utils/palette_blending.hpp"
@@ -102,6 +103,7 @@ void DrawHorizontalLine(const Surface &out, Point from, int width, std::uint8_t 
 void UnsafeDrawHorizontalLine(const Surface &out, Point from, int width, std::uint8_t colorIndex)
 {
 	std::memset(&out[from], colorIndex, width);
+	MarkRenderLayerSpan(out, from, width);
 }
 
 void DrawVerticalLine(const Surface &out, Point from, int height, std::uint8_t colorIndex)
@@ -119,12 +121,14 @@ void DrawVerticalLine(const Surface &out, Point from, int height, std::uint8_t c
 
 void UnsafeDrawVerticalLine(const Surface &out, Point from, int height, std::uint8_t colorIndex)
 {
+	const int originalHeight = height;
 	auto *dst = &out[from];
 	const auto pitch = out.pitch();
 	while (height-- > 0) {
 		*dst = colorIndex;
 		dst += pitch;
 	}
+	MarkRenderLayerRect(out, { from, { 1, originalHeight } });
 }
 
 void DrawHalfTransparentHorizontalLine(const Surface &out, Point from, int width, uint8_t colorIndex)
@@ -182,6 +186,7 @@ void DrawHalfTransparentRectTo(const Surface &out, int sx, int sy, int width, in
 	}
 
 	DrawHalfTransparentBlendedRectTo(out, sx, sy, width, height);
+	MarkRenderLayerRect(out, { { sx, sy }, { width, height } });
 }
 
 void DrawHalfTransparentRectTo(const Surface &out, int sx, int sy, int width, int height, uint8_t color)
@@ -210,6 +215,7 @@ void DrawHalfTransparentRectTo(const Surface &out, int sx, int sy, int width, in
 	}
 
 	DrawHalfTransparentUnalignedBlendedRectTo(out, sx, sy, width, height, color);
+	MarkRenderLayerRect(out, { { sx, sy }, { width, height } });
 }
 
 void SetHalfTransparentPixel(const Surface &out, Point position, uint8_t color)
@@ -218,6 +224,7 @@ void SetHalfTransparentPixel(const Surface &out, Point position, uint8_t color)
 		uint8_t *pix = out.at(position.x, position.y);
 		const auto &lookupTable = paletteTransparencyLookup[color];
 		*pix = lookupTable[*pix];
+		MarkRenderLayerPixel(out, position);
 	}
 }
 
@@ -227,17 +234,24 @@ void UnsafeDrawBorder2px(const Surface &out, Rectangle rect, uint8_t color)
 	const size_t height = rect.size.height;
 	uint8_t *buf = &out[rect.position];
 	std::memset(buf, color, width);
+	MarkRenderLayerSpan(out, rect.position, static_cast<int>(width));
 	buf += out.pitch();
 	std::memset(buf, color, width);
+	MarkRenderLayerSpan(out, rect.position + Displacement { 0, 1 }, static_cast<int>(width));
 	buf += out.pitch();
 	for (size_t i = 4; i < height; ++i) {
 		buf[0] = buf[1] = color;
 		buf[width - 2] = buf[width - 1] = color;
+		const int y = rect.position.y + static_cast<int>(i) - 2;
+		MarkRenderLayerSpan(out, { rect.position.x, y }, 2);
+		MarkRenderLayerSpan(out, { rect.position.x + static_cast<int>(width) - 2, y }, 2);
 		buf += out.pitch();
 	}
 	std::memset(buf, color, width);
+	MarkRenderLayerSpan(out, rect.position + Displacement { 0, static_cast<int>(height) - 2 }, static_cast<int>(width));
 	buf += out.pitch();
 	std::memset(buf, color, width);
+	MarkRenderLayerSpan(out, rect.position + Displacement { 0, static_cast<int>(height) - 1 }, static_cast<int>(width));
 }
 
 } // namespace devilution

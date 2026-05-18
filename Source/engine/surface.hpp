@@ -19,6 +19,7 @@
 #endif
 
 #include "engine/point.hpp"
+#include "engine/render/render_layer.hpp"
 #include "utils/sdl_geometry.h"
 #include "utils/sdl_wrap.h"
 
@@ -87,8 +88,10 @@ struct Surface {
 	 */
 	void SetPixel(Point position, std::uint8_t col) const
 	{
-		if (InBounds(position))
+		if (InBounds(position)) {
 			(*this)[position] = col;
+			MarkRenderLayerPixel(*this, position);
+		}
 	}
 
 	/**
