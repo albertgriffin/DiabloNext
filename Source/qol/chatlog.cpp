@@ -22,6 +22,8 @@
 #include "help.h"
 #include "inv.h"
 #include "minitext.h"
+#include "player.h"
+#include "quests.h"
 #include "stores.h"
 #include "utils/language.h"
 #include "utils/str_cat.hpp"

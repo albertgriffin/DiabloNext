@@ -44,6 +44,9 @@
 #include "multi.h"
 #include "objects.h"
 #include "player.h"
+#include "players/combat.hpp"
+#include "players/death.hpp"
+#include "players/movement.hpp"
 #include "sound_effect_enums.h"
 #include "tables/itemdat.h"
 #include "tables/misdat.h"
@@ -72,6 +75,34 @@ namespace devilution {
 
 std::list<Missile> Missiles;
 bool MissilePreFlag;
+
+Player *Missile::sourcePlayer()
+{
+	if (IsNoneOf(_micaster, TARGET_BOTH, TARGET_MONSTERS) || _misource == -1)
+		return nullptr;
+	return &Players[_misource];
+}
+
+Monster *Missile::sourceMonster()
+{
+	if (_micaster != TARGET_PLAYERS || _misource == -1)
+		return nullptr;
+	return &Monsters[_misource];
+}
+
+bool Missile::isSameSource(Missile &missile)
+{
+	return sourceType() == missile.sourceType() && _misource == missile._misource;
+}
+
+MissileSource Missile::sourceType()
+{
+	if (_misource == -1)
+		return MissileSource::Trap;
+	if (_micaster == TARGET_PLAYERS)
+		return MissileSource::Monster;
+	return MissileSource::Player;
+}
 
 void Missile::setAnimation(MissileGraphicID animtype)
 {
@@ -2849,6 +2880,20 @@ Missile *AddMissile(WorldTilePosition src, WorldTilePosition dst, Direction midi
 	}
 
 	return &missile;
+}
+
+Missile *AddMissile(WorldTilePosition src, WorldTilePosition dst, Direction midir, MissileID mitype,
+    mienemy_type micaster, const Player &player, int midam, int spllvl,
+    Missile *parent, std::optional<SfxID> lSFX)
+{
+	return AddMissile(src, dst, midir, mitype, micaster, player.getId(), midam, spllvl, parent, lSFX);
+}
+
+Missile *AddMissile(WorldTilePosition src, WorldTilePosition dst, Direction midir, MissileID mitype,
+    mienemy_type micaster, const Monster &monster, int midam, int spllvl,
+    Missile *parent, std::optional<SfxID> lSFX)
+{
+	return AddMissile(src, dst, midir, mitype, micaster, static_cast<int>(monster.getId()), midam, spllvl, parent, lSFX);
 }
 
 void ProcessElementalArrow(Missile &missile)

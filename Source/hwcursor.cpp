@@ -26,6 +26,7 @@
 #include "engine/clx_sprite.hpp"
 #include "engine/render/clx_render.hpp"
 #include "engine/surface.hpp"
+#include "player.h"
 #include "utils/display.h"
 #include "utils/sdl_bilinear_scale.hpp"
 #include "utils/sdl_compat.h"

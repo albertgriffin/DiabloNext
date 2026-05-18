@@ -9,7 +9,6 @@
 #include "levels/drlg_l1.h"
 #include "levels/trigs.h"
 #include "multi.h"
-#include "player.h"
 #include "quests.h"
 #include "utils/endian_swap.hpp"
 

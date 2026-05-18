@@ -12,6 +12,7 @@
 #include "levels/setmaps.h"
 #include "lua/metadoc.hpp"
 #include "player.h"
+#include "players/lifecycle.hpp"
 #include "quests.h"
 #include "utils/str_cat.hpp"
 

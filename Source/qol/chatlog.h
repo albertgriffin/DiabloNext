@@ -5,11 +5,14 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include "DiabloUI/ui_flags.hpp"
 #include "engine/surface.hpp"
-#include "player.h"
 
 namespace devilution {
+
+struct Player;
 
 extern bool ChatLogFlag;
 

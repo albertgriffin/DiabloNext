@@ -8,9 +8,11 @@
 #include <cstdint>
 
 #include "engine/world_tile.hpp"
-#include "player.h"
+#include "tables/spelldat.h"
 
 namespace devilution {
+
+struct Player;
 
 enum class SpellCheckResult : uint8_t {
 	Success,

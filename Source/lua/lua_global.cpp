@@ -40,6 +40,7 @@
 #include "options.h"
 #include "plrmsg.h"
 #include "stores.h"
+#include "tables/playerdat.hpp"
 #include "utils/console.h"
 #include "utils/log.hpp"
 #include "utils/str_cat.hpp"

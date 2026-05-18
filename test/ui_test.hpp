@@ -23,6 +23,7 @@
 #include "minitext.h"
 #include "options.h"
 #include "player.h"
+#include "players/lifecycle.hpp"
 #include "qol/stash.h"
 #include "qol/visual_store.h"
 #include "quests.h"

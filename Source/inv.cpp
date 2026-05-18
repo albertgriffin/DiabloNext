@@ -3,6 +3,8 @@
  *
  * Implementation of player inventory.
  */
+#include "inv.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -30,7 +32,7 @@
 #include "engine/render/text_render.hpp"
 #include "engine/size.hpp"
 #include "hwcursor.hpp"
-#include "inv_iterators.hpp"
+#include "players/item_iterators.hpp"
 #include "levels/tile_properties.hpp"
 #include "levels/town.h"
 #include "minitext.h"

@@ -8,7 +8,6 @@
 
 #include "engine/point.hpp"
 #include "lua/metadoc.hpp"
-#include "player.h"
 #include "stores.h"
 #include "towners.h"
 

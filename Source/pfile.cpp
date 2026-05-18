@@ -27,6 +27,8 @@
 #include "menu.h"
 #include "mpq/mpq_common.hpp"
 #include "pack.h"
+#include "player.h"
+#include "players/lifecycle.hpp"
 #include "qol/stash.h"
 #include "tables/playerdat.hpp"
 #include "utils/endian_read.hpp"

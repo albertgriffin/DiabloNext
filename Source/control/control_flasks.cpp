@@ -2,6 +2,7 @@
 #include "control.hpp"
 
 #include "engine/surface.hpp"
+#include "player.h"
 #include "utils/str_cat.hpp"
 
 namespace devilution {

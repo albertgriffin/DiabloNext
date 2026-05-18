@@ -11,9 +11,10 @@
 
 #include "DiabloUI/ui_flags.hpp"
 #include "engine/surface.hpp"
-#include "player.h"
 
 namespace devilution {
+
+struct Player;
 
 void DelayPlrMessages(uint32_t delayTime);
 void EventPlrMsg(std::string_view text, UiFlags style = UiFlags::ColorWhitegold);

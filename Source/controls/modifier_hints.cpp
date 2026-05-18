@@ -15,6 +15,7 @@
 #include "options.h"
 #include "panels/spell_book.hpp"
 #include "panels/spell_icons.hpp"
+#include "player.h"
 #include "utils/language.h"
 
 namespace devilution {

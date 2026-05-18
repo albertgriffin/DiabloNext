@@ -5,6 +5,8 @@
 #include "inv.h"
 #include "levels/trigs.h"
 #include "panels/partypanel.hpp"
+#include "player.h"
+#include "players/item_iterators.hpp"
 #include "qol/stash.h"
 #include "qol/visual_store.h"
 #include "qol/xpbar.h"

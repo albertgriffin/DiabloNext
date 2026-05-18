@@ -49,7 +49,7 @@
 #include "hwcursor.hpp"
 #include "init.hpp"
 #include "options.h"
-#include "player.h"
+#include "players/player_types.hpp"
 #include "sound_effect_enums.h"
 #include "tables/playerdat.hpp"
 #include "utils/algorithm/container.hpp"

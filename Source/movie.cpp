@@ -20,6 +20,7 @@
 #include "engine/backbuffer_state.hpp"
 #include "engine/demomode.h"
 #include "engine/events.hpp"
+#include "engine/palette.h"
 #include "engine/sound.h"
 #include "hwcursor.hpp"
 #include "storm/storm_svid.h"

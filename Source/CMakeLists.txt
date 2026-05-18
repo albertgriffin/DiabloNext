@@ -77,6 +77,7 @@ set(libdevilutionx_SRCS
   dvlnet/frame_queue.cpp
   dvlnet/loopback.cpp
   dvlnet/packet.cpp
+  dvlnet/player_info.cpp
 
   engine/actor_position.cpp
   engine/animationinfo.cpp
@@ -649,6 +650,15 @@ endif()
 
 add_devilutionx_object_library(libdevilutionx_player
   player.cpp
+  players/actions.cpp
+  players/animation.cpp
+  players/combat.cpp
+  players/death.cpp
+  players/item_iterators.cpp
+  players/lifecycle.cpp
+  players/movement.cpp
+  players/player.cpp
+  players/progression.cpp
   tables/playerdat.cpp
 )
 target_link_dependencies(libdevilutionx_player

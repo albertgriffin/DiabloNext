@@ -11,6 +11,7 @@
 #include "cursor.h"
 #include "engine/point.hpp"
 #include "player.h"
+#include "players/actions.hpp"
 #include "stores.h"
 
 namespace devilution {
