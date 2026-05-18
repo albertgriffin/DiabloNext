@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstdint>
 
 #include "engine/render/clx_render.hpp"
 #include "engine/render/primitive_render.hpp"
@@ -179,7 +180,7 @@ TEST(RenderLayer, ClxOpaqueRunsStampLayer)
 	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 3, 1, 8, SDL_PIXELFORMAT_INDEX8);
 	Surface out(surface.get());
 	const std::array<uint8_t, 9> spriteData { 6, 0, 2, 0, 1, 0, 0xFE, 9, 10 };
-	const ClxSprite sprite(spriteData.data(), spriteData.size());
+	const ClxSprite sprite(spriteData.data(), static_cast<uint32_t>(spriteData.size()));
 
 	BeginTestRenderLayerFrame(out);
 	{

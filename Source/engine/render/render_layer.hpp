@@ -11,6 +11,7 @@
 
 #include "engine/rectangle.hpp"
 #include "engine/render/render_layer_diagnostics.hpp"
+#include "utils/attributes.h"
 
 namespace devilution {
 
@@ -49,7 +50,7 @@ void RecordRenderLayerDirtyRect(RenderLayer layer);
 [[nodiscard]] bool SaveRenderLayerMapRegion(Rectangle rect, uint8_t *destination, int destinationPitch);
 bool RestoreRenderLayerMapRegion(Rectangle rect, const uint8_t *source, int sourcePitch);
 
-extern bool RenderLayerCaptureActive;
+extern DVL_API_FOR_TEST bool RenderLayerCaptureActive;
 
 void MarkRenderLayerPixelSlow(const Surface &surface, Point position);
 void MarkRenderLayerSpanSlow(const Surface &surface, Point position, int width);
