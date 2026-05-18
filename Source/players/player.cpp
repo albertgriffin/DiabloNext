@@ -46,6 +46,50 @@ bool Player::CanUseItem(const Item &item) const
 	    && _pDexterity >= item._iMinDex;
 }
 
+bool Player::CanCleave()
+{
+	switch (_pClass) {
+	case HeroClass::Warrior:
+	case HeroClass::Rogue:
+	case HeroClass::Sorcerer:
+		return false;
+	case HeroClass::Monk:
+		return isEquipped(ItemType::Staff);
+	case HeroClass::Bard:
+		return InvBody[INVLOC_HAND_LEFT]._itype == ItemType::Sword && InvBody[INVLOC_HAND_RIGHT]._itype == ItemType::Sword;
+	case HeroClass::Barbarian:
+		return isEquipped(ItemType::Axe) || (!isEquipped(ItemType::Shield) && (isEquipped(ItemType::Mace, true) || isEquipped(ItemType::Sword, true)));
+	default:
+		return false;
+	}
+}
+
+bool Player::isEquipped(ItemType itemType, bool isTwoHanded)
+{
+	switch (itemType) {
+	case ItemType::Sword:
+	case ItemType::Axe:
+	case ItemType::Bow:
+	case ItemType::Mace:
+	case ItemType::Shield:
+	case ItemType::Staff:
+		return (InvBody[INVLOC_HAND_LEFT]._itype == itemType && (!isTwoHanded || InvBody[INVLOC_HAND_LEFT]._iLoc == ILOC_TWOHAND))
+		    || (InvBody[INVLOC_HAND_RIGHT]._itype == itemType && (!isTwoHanded || InvBody[INVLOC_HAND_LEFT]._iLoc == ILOC_TWOHAND));
+	case ItemType::LightArmor:
+	case ItemType::MediumArmor:
+	case ItemType::HeavyArmor:
+		return InvBody[INVLOC_CHEST]._itype == itemType;
+	case ItemType::Helm:
+		return InvBody[INVLOC_HEAD]._itype == itemType;
+	case ItemType::Ring:
+		return InvBody[INVLOC_RING_LEFT]._itype == itemType || InvBody[INVLOC_RING_RIGHT]._itype == itemType;
+	case ItemType::Amulet:
+		return InvBody[INVLOC_AMULET]._itype == itemType;
+	default:
+		return false;
+	}
+}
+
 void Player::RemoveInvItem(int iv, bool calcScrolls)
 {
 	if (this == MyPlayer) {
@@ -228,10 +272,118 @@ bool Player::isWalking() const
 	return IsAnyOf(_pmode, PM_WALK_NORTHWARDS, PM_WALK_SOUTHWARDS, PM_WALK_SIDEWAYS);
 }
 
+item_equip_type Player::GetItemLocation(const Item &item) const
+{
+	if (_pClass == HeroClass::Barbarian && item._iLoc == ILOC_TWOHAND && IsAnyOf(item._itype, ItemType::Sword, ItemType::Mace))
+		return ILOC_ONEHAND;
+	return item._iLoc;
+}
+
+int Player::GetArmor() const
+{
+	return _pIBonusAC + _pIAC + _pDexterity / 5;
+}
+
+int Player::GetMeleeToHit() const
+{
+	return getCharacterLevel() + _pDexterity / 2 + _pIBonusToHit + getPlayerCombatData().baseMeleeToHit;
+}
+
+int Player::GetMeleePiercingToHit() const
+{
+	int hper = GetMeleeToHit();
+	// in hellfire armor piercing ignores % of enemy armor instead, no way to include it here
+	if (!gbIsHellfire)
+		hper += _pIEnAc;
+	return hper;
+}
+
+int Player::GetRangedToHit() const
+{
+	return getCharacterLevel() + _pDexterity + _pIBonusToHit + getPlayerCombatData().baseRangedToHit;
+}
+
+int Player::GetRangedPiercingToHit() const
+{
+	int hper = GetRangedToHit();
+	// in hellfire armor piercing ignores % of enemy armor instead, no way to include it here
+	if (!gbIsHellfire)
+		hper += _pIEnAc;
+	return hper;
+}
+
+int Player::GetMagicToHit() const
+{
+	return _pMagic + getPlayerCombatData().baseMagicToHit;
+}
+
+int Player::GetBlockChance(bool useLevel) const
+{
+	int blkper = _pDexterity + getBaseToBlock();
+	if (useLevel)
+		blkper += getCharacterLevel() * 2;
+	return blkper;
+}
+
 int Player::GetManaShieldDamageReduction()
 {
 	constexpr uint8_t Max = 7;
 	return 24 - (std::min(_pSplLvl[static_cast<int8_t>(SpellID::ManaShield)], Max) * 3);
+}
+
+int Player::GetSpellLevel(SpellID spell) const
+{
+	if (spell == SpellID::Invalid || static_cast<std::size_t>(spell) >= sizeof(_pSplLvl)) {
+		return 0;
+	}
+
+	return std::max<int>(_pISplLvlAdd + _pSplLvl[static_cast<std::size_t>(spell)], 0);
+}
+
+int Player::CalculateArmorPierce(int monsterArmor, bool isMelee) const
+{
+	int tmac = monsterArmor;
+	if (_pIEnAc > 0) {
+		if (gbIsHellfire) {
+			int pIEnAc = _pIEnAc - 1;
+			if (pIEnAc > 0)
+				tmac >>= pIEnAc;
+			else
+				tmac -= tmac / 4;
+		}
+		if (isMelee && _pClass == HeroClass::Barbarian) {
+			tmac -= monsterArmor / 8;
+		}
+	}
+	if (tmac < 0)
+		tmac = 0;
+
+	return tmac;
+}
+
+int Player::UpdateHitPointPercentage()
+{
+	if (_pMaxHP <= 0) { // divide by zero guard
+		_pHPPer = 0;
+	} else {
+		// Maximum achievable HP is approximately 1200. Diablo uses fixed point integers where the last 6 bits are
+		// fractional values. This means that we will never overflow HP values normally by doing this multiplication
+		// as the max value is representable in 17 bits and the multiplication result will be at most 23 bits
+		_pHPPer = std::clamp(_pHitPoints * 81 / _pMaxHP, 0, 81); // hp should never be greater than maxHP but just in case
+	}
+
+	return _pHPPer;
+}
+
+int Player::UpdateManaPercentage()
+{
+	if (_pMaxMana <= 0) {
+		_pManaPer = 0;
+	} else {
+		_pManaPer = std::clamp(_pMana * 81 / _pMaxMana, 0, 81);
+	}
+
+	return _pManaPer;
 }
 
 void Player::RestorePartialLife()
@@ -244,6 +396,12 @@ void Player::RestorePartialLife()
 		l += l / 2;
 	_pHitPoints = std::min(_pHitPoints + l, _pMaxHP);
 	_pHPBase = std::min(_pHPBase + l, _pMaxHPBase);
+}
+
+void Player::RestoreFullLife()
+{
+	_pHitPoints = _pMaxHP;
+	_pHPBase = _pMaxHPBase;
 }
 
 void Player::RestorePartialMana()
@@ -260,6 +418,14 @@ void Player::RestorePartialMana()
 	}
 }
 
+void Player::RestoreFullMana()
+{
+	if (HasNoneOf(_pIFlags, ItemSpecialEffect::NoMana)) {
+		_pMana = _pMaxMana;
+		_pManaBase = _pMaxManaBase;
+	}
+}
+
 void Player::ReadySpellFromEquipment(inv_body_loc bodyLocation, bool forceSpell)
 {
 	const Item &item = InvBody[bodyLocation];
@@ -272,6 +438,44 @@ void Player::ReadySpellFromEquipment(inv_body_loc bodyLocation, bool forceSpell)
 	}
 }
 
+bool Player::UsesRangedWeapon() const
+{
+	return static_cast<PlayerWeaponGraphic>(_pgfxnum & 0xF) == PlayerWeaponGraphic::Bow;
+}
+
+bool Player::CanChangeAction()
+{
+	if (_pmode == PM_STAND)
+		return true;
+	if (_pmode == PM_ATTACK && AnimInfo.currentFrame >= _pAFNum)
+		return true;
+	if (_pmode == PM_RATTACK && AnimInfo.currentFrame >= _pAFNum)
+		return true;
+	if (_pmode == PM_SPELL && AnimInfo.currentFrame >= _pSFNum)
+		return true;
+	if (isWalking() && AnimInfo.isLastFrame())
+		return true;
+	return false;
+}
+
+ClxSprite Player::currentSprite() const
+{
+	return previewCelSprite ? *previewCelSprite : AnimInfo.currentSprite();
+}
+
+Displacement Player::getRenderingOffset(const ClxSprite sprite) const
+{
+	Displacement offset = { -CalculateSpriteTileCenterX(sprite.width()), 0 };
+	if (isWalking())
+		offset += GetOffsetForWalking(AnimInfo, _pdir);
+	return offset;
+}
+
+uint8_t Player::getCharacterLevel() const
+{
+	return _pLevel;
+}
+
 void Player::setCharacterLevel(uint8_t level)
 {
 	this->_pLevel = std::clamp<uint8_t>(level, 1U, getMaxCharacterLevel());
@@ -282,9 +486,48 @@ uint8_t Player::getMaxCharacterLevel() const
 	return GetMaximumCharacterLevel();
 }
 
+bool Player::isMaxCharacterLevel() const
+{
+	return getCharacterLevel() >= getMaxCharacterLevel();
+}
+
 uint32_t Player::getNextExperienceThreshold() const
 {
 	return GetNextExperienceThresholdForLevel(this->getCharacterLevel());
+}
+
+bool Player::isOnActiveLevel() const
+{
+	if (setlevel)
+		return isOnLevel(setlvlnum);
+	return isOnLevel(currlevel);
+}
+
+bool Player::isOnLevel(uint8_t level) const
+{
+	return !this->plrIsOnSetLevel && this->plrlevel == level;
+}
+
+bool Player::isOnLevel(_setlevels level) const
+{
+	return this->plrIsOnSetLevel && this->plrlevel == static_cast<uint8_t>(level);
+}
+
+bool Player::isOnArenaLevel() const
+{
+	return plrIsOnSetLevel && IsArenaLevel(static_cast<_setlevels>(plrlevel));
+}
+
+void Player::setLevel(uint8_t level)
+{
+	this->plrlevel = level;
+	this->plrIsOnSetLevel = false;
+}
+
+void Player::setLevel(_setlevels level)
+{
+	this->plrlevel = static_cast<uint8_t>(level);
+	this->plrIsOnSetLevel = true;
 }
 
 int32_t Player::calculateBaseLife() const
@@ -325,6 +568,24 @@ bool Player::isLevelOwnedByLocalClient() const
 	}
 
 	return false;
+}
+
+bool Player::isHoldingItem(const ItemType type) const
+{
+	const Item &leftHandItem = InvBody[INVLOC_HAND_LEFT];
+	const Item &rightHandItem = InvBody[INVLOC_HAND_RIGHT];
+
+	return (type == leftHandItem._itype && leftHandItem._iStatFlag) || (type == rightHandItem._itype && rightHandItem._iStatFlag);
+}
+
+bool Player::hasNoLife() const
+{
+	return leveltype == DTYPE_TOWN ? false : _pHitPoints >> 6 <= 0;
+}
+
+bool Player::hasNoMana() const
+{
+	return _pMana >> 6 <= 0;
 }
 
 } // namespace devilution
