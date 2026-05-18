@@ -38,6 +38,7 @@ set(tests
   townerdat_test
   writehero_test
   vendor_test
+  frame_compositor_test
   panel_state_test
   store_transaction_test
   visual_store_test

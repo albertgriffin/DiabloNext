@@ -20,6 +20,7 @@
 #include "controls/control_mode.hpp"
 #include "controls/plrctrls.h"
 #include "engine/palette.h"
+#include "engine/render/frame_compositor.hpp"
 #include "engine/render/primitive_render.hpp"
 #include "headless_mode.hpp"
 #include "init.hpp"
@@ -140,11 +141,13 @@ void dx_cleanup()
 
 void CreateBackBuffer()
 {
-	if (CanRenderDirectlyToOutputSurface()) {
+	if (!FrameCompositionEnabled() && CanRenderDirectlyToOutputSurface()) {
 		Log("{}", "Will render directly to the SDL output surface");
 		PalSurface = GetOutputSurface();
 		RenderDirectlyToOutputSurface = true;
 	} else {
+		if (FrameCompositionEnabled())
+			Log("{}", "Will render to an indexed backbuffer for frame composition");
 		PinnedPalSurface = SDLWrap::CreateRGBSurfaceWithFormat(
 		    /*flags=*/0,
 		    /*width=*/gnScreenWidth,
@@ -152,7 +155,9 @@ void CreateBackBuffer()
 		    /*depth=*/8,
 		    SDL_PIXELFORMAT_INDEX8);
 		PalSurface = PinnedPalSurface.get();
+		RenderDirectlyToOutputSurface = false;
 	}
+	ResetFrameCompositionDirtyRects();
 
 #if defined(USE_SDL3)
 	if (!SDL_SetSurfacePalette(PalSurface, Palette.get())) ErrSdl();
@@ -169,6 +174,15 @@ void CreateBackBuffer()
 
 void BltFast(SDL_Rect *srcRect, SDL_Rect *dstRect)
 {
+	if (FrameCompositionEnabled()) {
+		if (srcRect == nullptr) {
+			SubmitFrameCompositionFullFrame();
+		} else {
+			const SDL_Rect *dirtyRect = dstRect != nullptr ? dstRect : srcRect;
+			SubmitFrameCompositionDirtyRect({ { dirtyRect->x, dirtyRect->y }, { dirtyRect->w, dirtyRect->h } });
+		}
+		return;
+	}
 	if (RenderDirectlyToOutputSurface)
 		return;
 	Blit(PalSurface, srcRect, dstRect);
@@ -240,6 +254,8 @@ void RenderPresent()
 		LimitFrameRate();
 		return;
 	}
+
+	ComposeFrameToOutput(surface);
 
 #ifndef USE_SDL1
 	if (renderer != nullptr) {

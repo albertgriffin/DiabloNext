@@ -555,6 +555,16 @@ struct GraphicsOptions : OptionCategoryBase {
 	OptionEntryBoolean showFPS;
 };
 
+struct ExperimentalOptions : OptionCategoryBase {
+	ExperimentalOptions();
+	std::vector<OptionEntryBase *> GetEntries() override;
+
+	/** @brief Use the experimental final frame compositor path. */
+	OptionEntryBoolean renderFrameCompositor;
+	/** @brief Apply a visible RGB transform in the experimental frame compositor. */
+	OptionEntryBoolean renderFrameCompositorDiagnosticTransform;
+};
+
 struct GameplayOptions : OptionCategoryBase {
 	GameplayOptions();
 	std::vector<OptionEntryBase *> GetEntries() override;
@@ -866,6 +876,7 @@ struct Options {
 	AudioOptions Audio;
 	GameplayOptions Gameplay;
 	GraphicsOptions Graphics;
+	ExperimentalOptions Experimental;
 	ControllerOptions Controller;
 	NetworkOptions Network;
 	ChatOptions Chat;
@@ -882,6 +893,7 @@ struct Options {
 			&GameMode,
 			&StartUp,
 			&Graphics,
+			&Experimental,
 			&Audio,
 			&Diablo,
 			&Hellfire,
