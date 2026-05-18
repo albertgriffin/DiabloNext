@@ -2,27 +2,23 @@
 
 #include <cstring>
 
-#include "player.h"
+#include "players/player_globals.hpp"
 
 namespace devilution::net {
 
 std::size_t GetPlayerCount()
 {
-	return Players.size();
+	return PlayersCount();
 }
 
 void CopyActivePlayerName(plr_t playerId, uint8_t *destination)
 {
 	std::memset(destination, '\0', PlayerNameLength);
 
-	if (playerId >= Players.size())
+	if (!IsPlayerActive(playerId))
 		return;
 
-	const Player &player = Players[playerId];
-	if (!player.plractive)
-		return;
-
-	std::memcpy(destination, player._pName, PlayerNameLength);
+	std::memcpy(destination, GetPlayerName(playerId), PlayerNameLength);
 }
 
 } // namespace devilution::net

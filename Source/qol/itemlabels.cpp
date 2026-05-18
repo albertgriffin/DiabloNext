@@ -18,7 +18,7 @@
 #include "gmenu.h"
 #include "inv.h"
 #include "options.h"
-#include "player.h"
+#include "players/player_globals.hpp"
 #include "qol/stash.h"
 #include "stores.h"
 #include "utils/algorithm/container.hpp"

@@ -2,6 +2,9 @@
 #include "control.hpp"
 #include "control_panel.hpp"
 
+#include <cassert>
+#include <cstring>
+
 #include "control/control_chat_commands.hpp"
 #include "diablo.h"
 #include "engine/backbuffer_state.hpp"
@@ -9,7 +12,7 @@
 #include "options.h"
 #include "panels/console.hpp"
 #include "panels/mainpanel.hpp"
-#include "player.h"
+#include "players/player_globals.hpp"
 #include "quick_messages.hpp"
 #include "utils/display.h"
 #include "utils/sdl_compat.h"
@@ -42,7 +45,7 @@ void ResetChatMessage()
 
 	uint32_t pmask = 0;
 
-	for (size_t i = 0; i < Players.size(); i++) {
+	for (size_t i = 0; i < PlayersCount(); i++) {
 		if (WhisperList[i])
 			pmask |= 1 << i;
 	}
@@ -123,12 +126,11 @@ void DrawChatBox(const Surface &out)
 
 	x += 46;
 	int talkBtn = 0;
-	for (size_t i = 0; i < Players.size(); i++) {
-		Player &player = Players[i];
-		if (&player == MyPlayer)
+	for (size_t i = 0; i < PlayersCount(); i++) {
+		if (IsLocalPlayerId(i))
 			continue;
 
-		const UiFlags color = player.friendlyMode ? UiFlags::ColorWhitegold : UiFlags::ColorRed;
+		const UiFlags color = IsPlayerFriendly(i) ? UiFlags::ColorWhitegold : UiFlags::ColorRed;
 		const Point talkPanPosition = mainPanelPosition + Displacement { 172, 84 + (18 * talkBtn) };
 		if (WhisperList[i]) {
 			// the normal (unpressed) voice button is pre-rendered on the panel, only need to draw over it when the button is held
@@ -150,8 +152,8 @@ void DrawChatBox(const Surface &out)
 			// the first button be treated the same as the other two further down the panel.
 			RenderClxSprite(out, (*TalkButton)[TalkButtonsDown[talkBtn] ? 1 : 0], talkPanPosition + Displacement { 4, -15 });
 		}
-		if (player.plractive) {
-			DrawString(out, player._pName, { { x, y + 60 + (talkBtn * 18) }, { 204, 0 } }, { .flags = color });
+		if (IsPlayerActive(i)) {
+			DrawString(out, GetPlayerName(i), { { x, y + 60 + (talkBtn * 18) }, { 204, 0 } }, { .flags = color });
 		}
 
 		talkBtn++;
@@ -203,11 +205,11 @@ void CheckMuteButtonUp()
 	int off = (MousePosition.y - buttons.position.y) / (MuteButtonRect.size.height + MuteButtonPadding);
 
 	size_t playerId = 0;
-	for (; playerId < Players.size() && off != -1; ++playerId) {
-		if (playerId != MyPlayerId)
+	for (; playerId < PlayersCount() && off != -1; ++playerId) {
+		if (!IsLocalPlayerId(playerId))
 			off--;
 	}
-	if (playerId > 0 && playerId <= Players.size())
+	if (playerId > 0 && playerId <= PlayersCount())
 		WhisperList[playerId - 1] = !WhisperList[playerId - 1];
 }
 
