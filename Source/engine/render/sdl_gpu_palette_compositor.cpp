@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <string_view>
 #include <vector>
@@ -57,6 +58,10 @@ namespace {
 
 constexpr std::string_view SdlGpuBackendName = "sdl-gpu-palette";
 
+constexpr int PaletteTextureWidth = 256;
+constexpr int PaletteTextureHeight = 1;
+constexpr uint32_t PaletteUploadBytes = PaletteTextureWidth * PaletteTextureHeight * 4;
+
 constexpr SDL_GPUShaderFormat SupportedShaderFormats = SDL_GPU_SHADERFORMAT_SPIRV
     | SDL_GPU_SHADERFORMAT_DXBC
     | SDL_GPU_SHADERFORMAT_DXIL
@@ -103,7 +108,9 @@ public:
 	void Destroy()
 	{
 		ReleaseTexture();
+		ReleaseIndexedTextures();
 		ReleaseTransferBuffer();
+		ReleaseIndexedTransferBuffers();
 		if (windowClaimed_ && device_ != nullptr && window_ != nullptr)
 			SDL_ReleaseWindowFromGPUDevice(device_, window_);
 		if (device_ != nullptr)
@@ -115,10 +122,15 @@ public:
 		hasPendingOutput_ = false;
 		outputTextureWidth_ = 0;
 		outputTextureHeight_ = 0;
+		indexTextureWidth_ = 0;
+		indexTextureHeight_ = 0;
 		transferBufferSize_ = 0;
+		indexTransferBufferSize_ = 0;
 		lastPresentMode_ = SDL_GPU_PRESENTMODE_VSYNC;
 		presentModeInitialized_ = false;
 		loggedIndexedDeferral_ = false;
+		paletteTextureUploaded_ = false;
+		uploadedPaletteVersion_ = 0;
 		pendingLogicalSize_ = {};
 		pendingOutputSize_ = {};
 		outputRgba_.clear();
@@ -131,9 +143,11 @@ public:
 
 	[[nodiscard]] bool PrepareIndexedFrame(const CompositionFrame &frame)
 	{
-		(void)frame;
+		const bool uploaded = UploadIndexedInputs(frame);
 		if (!loggedIndexedDeferral_) {
-			Log("SDL_GPU palette compositor indexed palette path is not implemented yet; using CPU pixel upload fallback");
+			Log(uploaded
+			        ? "SDL_GPU palette compositor uploaded indexed frame inputs; palette shader presentation is not implemented yet; using CPU pixel upload fallback"
+			        : "SDL_GPU palette compositor could not upload indexed frame inputs; using CPU pixel upload fallback");
 			loggedIndexedDeferral_ = true;
 		}
 		return false;
@@ -276,6 +290,256 @@ private:
 		transferBuffer_ = nullptr;
 	}
 
+	void ReleaseIndexedTextures()
+	{
+		if (indexTexture_ != nullptr && device_ != nullptr)
+			SDL_ReleaseGPUTexture(device_, indexTexture_);
+		if (paletteTexture_ != nullptr && device_ != nullptr)
+			SDL_ReleaseGPUTexture(device_, paletteTexture_);
+		indexTexture_ = nullptr;
+		paletteTexture_ = nullptr;
+	}
+
+	void ReleaseIndexedTransferBuffers()
+	{
+		if (indexTransferBuffer_ != nullptr && device_ != nullptr)
+			SDL_ReleaseGPUTransferBuffer(device_, indexTransferBuffer_);
+		if (paletteTransferBuffer_ != nullptr && device_ != nullptr)
+			SDL_ReleaseGPUTransferBuffer(device_, paletteTransferBuffer_);
+		indexTransferBuffer_ = nullptr;
+		paletteTransferBuffer_ = nullptr;
+	}
+
+	[[nodiscard]] bool EnsureIndexTexture(const int width, const int height)
+	{
+		if (indexTexture_ != nullptr && indexTextureWidth_ == width && indexTextureHeight_ == height)
+			return true;
+
+		if (indexTexture_ != nullptr && device_ != nullptr)
+			SDL_ReleaseGPUTexture(device_, indexTexture_);
+		indexTexture_ = nullptr;
+		indexTextureWidth_ = 0;
+		indexTextureHeight_ = 0;
+
+		const SDL_GPUTextureCreateInfo createInfo {
+			SDL_GPU_TEXTURETYPE_2D,
+			SDL_GPU_TEXTUREFORMAT_R8_UNORM,
+			SDL_GPU_TEXTUREUSAGE_SAMPLER,
+			static_cast<uint32_t>(width),
+			static_cast<uint32_t>(height),
+			1,
+			1,
+			SDL_GPU_SAMPLECOUNT_1,
+			0,
+		};
+		indexTexture_ = SDL_CreateGPUTexture(device_, &createInfo);
+		if (indexTexture_ == nullptr) {
+			Log("SDL_GPU palette compositor could not create index texture: {}", SDL_GetError());
+			return false;
+		}
+		indexTextureWidth_ = width;
+		indexTextureHeight_ = height;
+		return true;
+	}
+
+	[[nodiscard]] bool EnsurePaletteTexture()
+	{
+		if (paletteTexture_ != nullptr)
+			return true;
+
+		const SDL_GPUTextureCreateInfo createInfo {
+			SDL_GPU_TEXTURETYPE_2D,
+			SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+			SDL_GPU_TEXTUREUSAGE_SAMPLER,
+			static_cast<uint32_t>(PaletteTextureWidth),
+			static_cast<uint32_t>(PaletteTextureHeight),
+			1,
+			1,
+			SDL_GPU_SAMPLECOUNT_1,
+			0,
+		};
+		paletteTexture_ = SDL_CreateGPUTexture(device_, &createInfo);
+		if (paletteTexture_ == nullptr) {
+			Log("SDL_GPU palette compositor could not create palette texture: {}", SDL_GetError());
+			return false;
+		}
+		paletteTextureUploaded_ = false;
+		uploadedPaletteVersion_ = 0;
+		return true;
+	}
+
+	[[nodiscard]] bool EnsureIndexedTransferBuffer(const uint32_t size)
+	{
+		if (indexTransferBuffer_ != nullptr && indexTransferBufferSize_ >= size)
+			return true;
+
+		if (indexTransferBuffer_ != nullptr && device_ != nullptr)
+			SDL_ReleaseGPUTransferBuffer(device_, indexTransferBuffer_);
+		indexTransferBuffer_ = nullptr;
+		indexTransferBufferSize_ = 0;
+
+		const SDL_GPUTransferBufferCreateInfo createInfo {
+			SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+			size,
+			0,
+		};
+		indexTransferBuffer_ = SDL_CreateGPUTransferBuffer(device_, &createInfo);
+		if (indexTransferBuffer_ == nullptr) {
+			Log("SDL_GPU palette compositor could not create index transfer buffer: {}", SDL_GetError());
+			return false;
+		}
+		indexTransferBufferSize_ = size;
+		return true;
+	}
+
+	[[nodiscard]] bool EnsurePaletteTransferBuffer()
+	{
+		if (paletteTransferBuffer_ != nullptr)
+			return true;
+
+		const SDL_GPUTransferBufferCreateInfo createInfo {
+			SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+			PaletteUploadBytes,
+			0,
+		};
+		paletteTransferBuffer_ = SDL_CreateGPUTransferBuffer(device_, &createInfo);
+		if (paletteTransferBuffer_ == nullptr) {
+			Log("SDL_GPU palette compositor could not create palette transfer buffer: {}", SDL_GetError());
+			return false;
+		}
+		return true;
+	}
+
+	[[nodiscard]] bool CopyIndexBufferToTransferBuffer(const IndexBufferView &indexBuffer, const Size logicalSize, const uint32_t uploadSize)
+	{
+		void *mapped = SDL_MapGPUTransferBuffer(device_, indexTransferBuffer_, true);
+		if (mapped == nullptr) {
+			Log("SDL_GPU palette compositor could not map index transfer buffer: {}", SDL_GetError());
+			return false;
+		}
+
+		auto *dst = static_cast<uint8_t *>(mapped);
+		std::memset(dst, 0, uploadSize);
+		for (int y = 0; y < logicalSize.height; y++) {
+			const auto rowOffset = static_cast<ptrdiff_t>(y) * indexBuffer.pitch;
+			std::memcpy(dst + rowOffset, indexBuffer.pixels + rowOffset, static_cast<size_t>(logicalSize.width));
+		}
+		SDL_UnmapGPUTransferBuffer(device_, indexTransferBuffer_);
+		return true;
+	}
+
+	[[nodiscard]] bool CopyPaletteToTransferBuffer(const PaletteSnapshot &palette)
+	{
+		void *mapped = SDL_MapGPUTransferBuffer(device_, paletteTransferBuffer_, true);
+		if (mapped == nullptr) {
+			Log("SDL_GPU palette compositor could not map palette transfer buffer: {}", SDL_GetError());
+			return false;
+		}
+
+		auto *dst = static_cast<uint8_t *>(mapped);
+		for (size_t i = 0; i < palette.colors.size(); i++) {
+			dst[i * 4 + 0] = palette.colors[i].r;
+			dst[i * 4 + 1] = palette.colors[i].g;
+			dst[i * 4 + 2] = palette.colors[i].b;
+			dst[i * 4 + 3] = palette.colors[i].a;
+		}
+		SDL_UnmapGPUTransferBuffer(device_, paletteTransferBuffer_);
+		return true;
+	}
+
+	[[nodiscard]] bool UploadIndexedInputs(const CompositionFrame &frame)
+	{
+		if (!available_ || frame.indexBuffer.pixels == nullptr || frame.logicalSize.width <= 0 || frame.logicalSize.height <= 0)
+			return false;
+		if (frame.indexBuffer.width < frame.logicalSize.width || frame.indexBuffer.height < frame.logicalSize.height || frame.indexBuffer.pitch < frame.logicalSize.width)
+			return false;
+
+		const uint64_t uploadSize64 = static_cast<uint64_t>(frame.indexBuffer.pitch) * static_cast<uint64_t>(frame.logicalSize.height);
+		if (uploadSize64 > std::numeric_limits<uint32_t>::max())
+			return false;
+		const uint32_t indexUploadSize = static_cast<uint32_t>(uploadSize64);
+
+		if (!EnsureIndexTexture(frame.logicalSize.width, frame.logicalSize.height))
+			return false;
+		if (!EnsurePaletteTexture())
+			return false;
+		if (!EnsureIndexedTransferBuffer(indexUploadSize))
+			return false;
+		if (!EnsurePaletteTransferBuffer())
+			return false;
+		if (!CopyIndexBufferToTransferBuffer(frame.indexBuffer, frame.logicalSize, indexUploadSize))
+			return false;
+
+		const bool uploadPalette = !paletteTextureUploaded_ || uploadedPaletteVersion_ != frame.palette.version;
+		if (uploadPalette && !CopyPaletteToTransferBuffer(frame.palette))
+			return false;
+
+		SDL_GPUCommandBuffer *commandBuffer = SDL_AcquireGPUCommandBuffer(device_);
+		if (commandBuffer == nullptr) {
+			Log("SDL_GPU palette compositor could not acquire indexed upload command buffer: {}", SDL_GetError());
+			return false;
+		}
+
+		SDL_GPUCopyPass *copyPass = SDL_BeginGPUCopyPass(commandBuffer);
+		if (copyPass == nullptr) {
+			Log("SDL_GPU palette compositor could not begin indexed upload copy pass: {}", SDL_GetError());
+			(void)SDL_CancelGPUCommandBuffer(commandBuffer);
+			return false;
+		}
+
+		const SDL_GPUTextureTransferInfo indexSource {
+			indexTransferBuffer_,
+			0,
+			static_cast<uint32_t>(frame.indexBuffer.pitch),
+			static_cast<uint32_t>(frame.logicalSize.height),
+		};
+		const SDL_GPUTextureRegion indexDestination {
+			indexTexture_,
+			0,
+			0,
+			0,
+			0,
+			0,
+			static_cast<uint32_t>(frame.logicalSize.width),
+			static_cast<uint32_t>(frame.logicalSize.height),
+			1,
+		};
+		SDL_UploadToGPUTexture(copyPass, &indexSource, &indexDestination, true);
+
+		if (uploadPalette) {
+			const SDL_GPUTextureTransferInfo paletteSource {
+				paletteTransferBuffer_,
+				0,
+				static_cast<uint32_t>(PaletteTextureWidth),
+				static_cast<uint32_t>(PaletteTextureHeight),
+			};
+			const SDL_GPUTextureRegion paletteDestination {
+				paletteTexture_,
+				0,
+				0,
+				0,
+				0,
+				0,
+				static_cast<uint32_t>(PaletteTextureWidth),
+				static_cast<uint32_t>(PaletteTextureHeight),
+				1,
+			};
+			SDL_UploadToGPUTexture(copyPass, &paletteSource, &paletteDestination, true);
+		}
+		SDL_EndGPUCopyPass(copyPass);
+
+		if (!SDL_SubmitGPUCommandBuffer(commandBuffer)) {
+			Log("SDL_GPU palette compositor could not submit indexed upload command buffer: {}", SDL_GetError());
+			return false;
+		}
+
+		if (uploadPalette) {
+			paletteTextureUploaded_ = true;
+			uploadedPaletteVersion_ = frame.palette.version;
+		}
+		return true;
+	}
+
 	[[nodiscard]] bool EnsureOutputTexture(const int width, const int height)
 	{
 		if (outputTexture_ != nullptr && outputTextureWidth_ == width && outputTextureHeight_ == height)
@@ -392,15 +656,24 @@ private:
 	SDL_GPUDevice *device_ = nullptr;
 	SDL_Window *window_ = nullptr;
 	SDL_GPUTexture *outputTexture_ = nullptr;
+	SDL_GPUTexture *indexTexture_ = nullptr;
+	SDL_GPUTexture *paletteTexture_ = nullptr;
 	SDL_GPUTransferBuffer *transferBuffer_ = nullptr;
+	SDL_GPUTransferBuffer *indexTransferBuffer_ = nullptr;
+	SDL_GPUTransferBuffer *paletteTransferBuffer_ = nullptr;
 	bool windowClaimed_ = false;
 	bool available_ = false;
 	bool hasPendingOutput_ = false;
 	bool presentModeInitialized_ = false;
 	bool loggedIndexedDeferral_ = false;
+	bool paletteTextureUploaded_ = false;
 	int outputTextureWidth_ = 0;
 	int outputTextureHeight_ = 0;
+	int indexTextureWidth_ = 0;
+	int indexTextureHeight_ = 0;
 	uint32_t transferBufferSize_ = 0;
+	uint32_t indexTransferBufferSize_ = 0;
+	uint64_t uploadedPaletteVersion_ = 0;
 	SDL_GPUPresentMode lastPresentMode_ = SDL_GPU_PRESENTMODE_VSYNC;
 	Size pendingLogicalSize_ {};
 	Size pendingOutputSize_ {};
