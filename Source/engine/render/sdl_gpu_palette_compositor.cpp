@@ -34,6 +34,27 @@
 #define DEVILUTIONX_SDL_GPU_PALETTE_COMPOSITOR_ACTIVE 0
 #endif
 
+#if DEVILUTIONX_SDL_GPU_PALETTE_COMPOSITOR_ACTIVE
+#if __has_include("engine/render/shaders/sdl_gpu_palette.frag.spv.h") && __has_include("engine/render/shaders/sdl_gpu_palette.vert.spv.h")
+#include "engine/render/shaders/sdl_gpu_palette.frag.spv.h"
+#include "engine/render/shaders/sdl_gpu_palette.vert.spv.h"
+#define DEVILUTIONX_SDL_GPU_PALETTE_HAS_SPIRV 1
+#else
+#define DEVILUTIONX_SDL_GPU_PALETTE_HAS_SPIRV 0
+#endif
+
+#if __has_include("engine/render/shaders/sdl_gpu_palette.frag.dxil.h") && __has_include("engine/render/shaders/sdl_gpu_palette.vert.dxil.h")
+#include "engine/render/shaders/sdl_gpu_palette.frag.dxil.h"
+#include "engine/render/shaders/sdl_gpu_palette.vert.dxil.h"
+#define DEVILUTIONX_SDL_GPU_PALETTE_HAS_DXIL 1
+#else
+#define DEVILUTIONX_SDL_GPU_PALETTE_HAS_DXIL 0
+#endif
+
+#include "engine/render/shaders/sdl_gpu_palette.frag.msl.h"
+#include "engine/render/shaders/sdl_gpu_palette.vert.msl.h"
+#endif
+
 namespace devilution {
 namespace {
 
@@ -63,64 +84,75 @@ constexpr int PaletteTextureHeight = 1;
 constexpr uint32_t PaletteUploadBytes = PaletteTextureWidth * PaletteTextureHeight * 4;
 constexpr SDL_GPUTextureFormat PaletteExpandedTextureFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 
-constexpr char PaletteVertexShaderMsl[] = R"(
-#include <metal_stdlib>
-using namespace metal;
+constexpr SDL_GPUShaderFormat SupportedShaderFormats = SDL_GPU_SHADERFORMAT_MSL
+#if DEVILUTIONX_SDL_GPU_PALETTE_HAS_SPIRV
+    | SDL_GPU_SHADERFORMAT_SPIRV
+#endif
+#if DEVILUTIONX_SDL_GPU_PALETTE_HAS_DXIL
+    | SDL_GPU_SHADERFORMAT_DXIL
+#endif
+    ;
 
-struct VertexOut
-{
-	float4 position [[position]];
-	float2 uv;
+struct PaletteShaderAsset {
+	const uint8_t *code = nullptr;
+	size_t codeSize = 0;
+	const char *entrypoint = nullptr;
+	SDL_GPUShaderFormat format = SDL_GPU_SHADERFORMAT_INVALID;
 };
 
-vertex VertexOut main0(uint vertexId [[vertex_id]])
+[[nodiscard]] const char *ShaderFormatName(const SDL_GPUShaderFormat format)
 {
-	constexpr uint verts[6] = { 0, 1, 2, 0, 2, 3 };
-	constexpr float2 uvs[4] = {
-		float2(0.0, 0.0),
-		float2(1.0, 0.0),
-		float2(1.0, 1.0),
-		float2(0.0, 1.0),
-	};
-	constexpr float2 positions[4] = {
-		float2(-1.0, 1.0),
-		float2(1.0, 1.0),
-		float2(1.0, -1.0),
-		float2(-1.0, -1.0),
-	};
-
-	const uint vert = verts[vertexId];
-	VertexOut out;
-	out.position = float4(positions[vert], 0.0, 1.0);
-	out.uv = uvs[vert];
-	return out;
+	switch (format) {
+	case SDL_GPU_SHADERFORMAT_SPIRV:
+		return "SPIR-V";
+	case SDL_GPU_SHADERFORMAT_DXBC:
+		return "DXBC";
+	case SDL_GPU_SHADERFORMAT_DXIL:
+		return "DXIL";
+	case SDL_GPU_SHADERFORMAT_MSL:
+		return "MSL";
+	case SDL_GPU_SHADERFORMAT_METALLIB:
+		return "MetalLib";
+	default:
+		return "unknown";
+	}
 }
-)";
 
-constexpr char PaletteFragmentShaderMsl[] = R"(
-#include <metal_stdlib>
-using namespace metal;
-
-struct VertexOut
+[[nodiscard]] PaletteShaderAsset SelectPaletteVertexShader(const SDL_GPUShaderFormat supportedFormats)
 {
-	float4 position [[position]];
-	float2 uv;
-};
-
-fragment float4 main0(VertexOut in [[stage_in]],
-	texture2d<float> indexTexture [[texture(0)]],
-	texture2d<float> paletteTexture [[texture(1)]],
-	sampler indexSampler [[sampler(0)]],
-	sampler paletteSampler [[sampler(1)]])
-{
-	const float indexValue = indexTexture.sample(indexSampler, in.uv).r;
-	const float paletteIndex = floor(indexValue * 255.0 + 0.5);
-	const float paletteU = (paletteIndex + 0.5) / 256.0;
-	return paletteTexture.sample(paletteSampler, float2(paletteU, 0.5));
+#if DEVILUTIONX_SDL_GPU_PALETTE_HAS_SPIRV
+	if ((supportedFormats & SDL_GPU_SHADERFORMAT_SPIRV) != 0) {
+		return { sdl_gpu_palette_vert_spv, sdl_gpu_palette_vert_spv_len, "main", SDL_GPU_SHADERFORMAT_SPIRV };
+	}
+#endif
+#if DEVILUTIONX_SDL_GPU_PALETTE_HAS_DXIL
+	if ((supportedFormats & SDL_GPU_SHADERFORMAT_DXIL) != 0) {
+		return { sdl_gpu_palette_vert_dxil, sdl_gpu_palette_vert_dxil_len, "main", SDL_GPU_SHADERFORMAT_DXIL };
+	}
+#endif
+	if ((supportedFormats & SDL_GPU_SHADERFORMAT_MSL) != 0) {
+		return { sdl_gpu_palette_vert_msl, sdl_gpu_palette_vert_msl_len, "main0", SDL_GPU_SHADERFORMAT_MSL };
+	}
+	return {};
 }
-)";
 
-constexpr SDL_GPUShaderFormat SupportedShaderFormats = SDL_GPU_SHADERFORMAT_MSL;
+[[nodiscard]] PaletteShaderAsset SelectPaletteFragmentShader(const SDL_GPUShaderFormat supportedFormats)
+{
+#if DEVILUTIONX_SDL_GPU_PALETTE_HAS_SPIRV
+	if ((supportedFormats & SDL_GPU_SHADERFORMAT_SPIRV) != 0) {
+		return { sdl_gpu_palette_frag_spv, sdl_gpu_palette_frag_spv_len, "main", SDL_GPU_SHADERFORMAT_SPIRV };
+	}
+#endif
+#if DEVILUTIONX_SDL_GPU_PALETTE_HAS_DXIL
+	if ((supportedFormats & SDL_GPU_SHADERFORMAT_DXIL) != 0) {
+		return { sdl_gpu_palette_frag_dxil, sdl_gpu_palette_frag_dxil_len, "main", SDL_GPU_SHADERFORMAT_DXIL };
+	}
+#endif
+	if ((supportedFormats & SDL_GPU_SHADERFORMAT_MSL) != 0) {
+		return { sdl_gpu_palette_frag_msl, sdl_gpu_palette_frag_msl_len, "main0", SDL_GPU_SHADERFORMAT_MSL };
+	}
+	return {};
+}
 
 [[nodiscard]] int SurfaceBytesPerPixel(const SDL_Surface &surface)
 {
@@ -525,13 +557,16 @@ private:
 		palettePipelineFailed_ = false;
 	}
 
-	[[nodiscard]] SDL_GPUShader *CreateMslShader(const char *source, const size_t sourceSize, const SDL_GPUShaderStage stage, const uint32_t samplerCount)
+	[[nodiscard]] SDL_GPUShader *CreateShader(const PaletteShaderAsset &asset, const SDL_GPUShaderStage stage, const uint32_t samplerCount)
 	{
+		if (asset.format == SDL_GPU_SHADERFORMAT_INVALID || asset.code == nullptr || asset.codeSize == 0 || asset.entrypoint == nullptr)
+			return nullptr;
+
 		const SDL_GPUShaderCreateInfo createInfo {
-			sourceSize,
-			reinterpret_cast<const uint8_t *>(source),
-			"main0",
-			SDL_GPU_SHADERFORMAT_MSL,
+			asset.codeSize,
+			asset.code,
+			asset.entrypoint,
+			asset.format,
 			stage,
 			samplerCount,
 			0,
@@ -541,7 +576,7 @@ private:
 		};
 		SDL_GPUShader *shader = SDL_CreateGPUShader(device_, &createInfo);
 		if (shader == nullptr)
-			Log("SDL_GPU palette compositor could not create MSL shader: {}", SDL_GetError());
+			Log("SDL_GPU palette compositor could not create {} shader: {}", ShaderFormatName(asset.format), SDL_GetError());
 		return shader;
 	}
 
@@ -551,8 +586,10 @@ private:
 			return false;
 
 		const SDL_GPUShaderFormat supportedFormats = SDL_GetGPUShaderFormats(device_);
-		if ((supportedFormats & SDL_GPU_SHADERFORMAT_MSL) == 0) {
-			Log("SDL_GPU palette compositor requires MSL shaders in this spike; falling back to CPU palette composition");
+		const PaletteShaderAsset vertexShaderAsset = SelectPaletteVertexShader(supportedFormats);
+		const PaletteShaderAsset fragmentShaderAsset = SelectPaletteFragmentShader(supportedFormats);
+		if (vertexShaderAsset.format == SDL_GPU_SHADERFORMAT_INVALID || fragmentShaderAsset.format == SDL_GPU_SHADERFORMAT_INVALID) {
+			Log("SDL_GPU palette compositor has no shader asset compatible with this backend; falling back to CPU palette composition");
 			palettePipelineFailed_ = true;
 			return false;
 		}
@@ -565,12 +602,12 @@ private:
 		palettePipeline_ = nullptr;
 		palettePipelineFormat_ = SDL_GPU_TEXTUREFORMAT_INVALID;
 
-		SDL_GPUShader *vertexShader = CreateMslShader(PaletteVertexShaderMsl, sizeof(PaletteVertexShaderMsl) - 1, SDL_GPU_SHADERSTAGE_VERTEX, 0);
+		SDL_GPUShader *vertexShader = CreateShader(vertexShaderAsset, SDL_GPU_SHADERSTAGE_VERTEX, 0);
 		if (vertexShader == nullptr) {
 			palettePipelineFailed_ = true;
 			return false;
 		}
-		SDL_GPUShader *fragmentShader = CreateMslShader(PaletteFragmentShaderMsl, sizeof(PaletteFragmentShaderMsl) - 1, SDL_GPU_SHADERSTAGE_FRAGMENT, 2);
+		SDL_GPUShader *fragmentShader = CreateShader(fragmentShaderAsset, SDL_GPU_SHADERSTAGE_FRAGMENT, 2);
 		if (fragmentShader == nullptr) {
 			SDL_ReleaseGPUShader(device_, vertexShader);
 			palettePipelineFailed_ = true;
