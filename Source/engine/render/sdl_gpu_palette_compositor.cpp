@@ -83,6 +83,8 @@ constexpr int PaletteTextureWidth = 256;
 constexpr int PaletteTextureHeight = 1;
 constexpr uint32_t PaletteUploadBytes = PaletteTextureWidth * PaletteTextureHeight * 4;
 constexpr SDL_GPUTextureFormat PaletteExpandedTextureFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+constexpr SDL_GPUTextureFormat LightTextureFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+constexpr SDL_GPUTextureFormat ShadowTextureFormat = SDL_GPU_TEXTUREFORMAT_R8_UNORM;
 
 constexpr SDL_GPUShaderFormat SupportedShaderFormats = SDL_GPU_SHADERFORMAT_MSL
 #if DEVILUTIONX_SDL_GPU_PALETTE_HAS_SPIRV
@@ -197,8 +199,10 @@ public:
 		ReleasePaletteExpandedTexture();
 		ReleaseTexture();
 		ReleaseIndexedTextures();
+		ReleaseLightingTextures();
 		ReleaseTransferBuffer();
 		ReleaseIndexedTransferBuffers();
+		ReleaseLightingTransferBuffers();
 		if (windowClaimed_ && device_ != nullptr && window_ != nullptr)
 			SDL_ReleaseWindowFromGPUDevice(device_, window_);
 		if (device_ != nullptr)
@@ -217,6 +221,7 @@ public:
 		presentModeInitialized_ = false;
 		loggedIndexedDeferral_ = false;
 		loggedIndexedPresentation_ = false;
+		loggedLightingInputs_ = false;
 		palettePipelineFailed_ = false;
 		paletteTextureUploaded_ = false;
 		uploadedPaletteVersion_ = 0;
@@ -224,6 +229,10 @@ public:
 		palettePipelineFormat_ = SDL_GPU_TEXTUREFORMAT_INVALID;
 		paletteExpandedTextureWidth_ = 0;
 		paletteExpandedTextureHeight_ = 0;
+		lightTextureWidth_ = 0;
+		lightTextureHeight_ = 0;
+		shadowTextureWidth_ = 0;
+		shadowTextureHeight_ = 0;
 		pendingLogicalSize_ = {};
 		pendingOutputSize_ = {};
 		outputRgba_.clear();
@@ -234,10 +243,11 @@ public:
 		return available_;
 	}
 
-	[[nodiscard]] bool PrepareIndexedFrame(const CompositionFrame &frame)
+	[[nodiscard]] bool PrepareIndexedFrame(const AcceleratedPaletteFrame &frame)
 	{
+		const CompositionFrame &composition = frame.composition;
 		if (!EnsurePaletteRenderResources()
-		    || !EnsurePaletteExpandedTexture(frame.logicalSize.width, frame.logicalSize.height)
+		    || !EnsurePaletteExpandedTexture(composition.logicalSize.width, composition.logicalSize.height)
 		    || !UploadIndexedInputs(frame)) {
 			if (!loggedIndexedDeferral_) {
 				Log("SDL_GPU palette compositor could not prepare indexed palette presentation; using CPU pixel upload fallback");
@@ -250,7 +260,11 @@ public:
 			Log("SDL_GPU palette compositor using indexed palette shader presentation");
 			loggedIndexedPresentation_ = true;
 		}
-		pendingLogicalSize_ = frame.logicalSize;
+		if (!loggedLightingInputs_) {
+			Log("SDL_GPU palette compositor using light/shadow shader inputs");
+			loggedLightingInputs_ = true;
+		}
+		pendingLogicalSize_ = composition.logicalSize;
 		pendingOutputSize_ = {};
 		pendingMode_ = PendingMode::IndexedPalette;
 		return true;
@@ -456,10 +470,12 @@ private:
 		const SDL_GPUTextureSamplerBinding samplers[] {
 			{ indexTexture_, indexSampler_ },
 			{ paletteTexture_, paletteSampler_ },
+			{ lightTexture_, indexSampler_ },
+			{ shadowTexture_, indexSampler_ },
 		};
 		SDL_SetGPUViewport(renderPass, &gpuViewport);
 		SDL_BindGPUGraphicsPipeline(renderPass, palettePipeline_);
-		SDL_BindGPUFragmentSamplers(renderPass, 0, samplers, 2);
+		SDL_BindGPUFragmentSamplers(renderPass, 0, samplers, 4);
 		SDL_DrawGPUPrimitives(renderPass, 6, 1, 0, 0);
 		SDL_EndGPURenderPass(renderPass);
 
@@ -523,6 +539,20 @@ private:
 		paletteTexture_ = nullptr;
 	}
 
+	void ReleaseLightingTextures()
+	{
+		if (lightTexture_ != nullptr && device_ != nullptr)
+			SDL_ReleaseGPUTexture(device_, lightTexture_);
+		if (shadowTexture_ != nullptr && device_ != nullptr)
+			SDL_ReleaseGPUTexture(device_, shadowTexture_);
+		lightTexture_ = nullptr;
+		shadowTexture_ = nullptr;
+		lightTextureWidth_ = 0;
+		lightTextureHeight_ = 0;
+		shadowTextureWidth_ = 0;
+		shadowTextureHeight_ = 0;
+	}
+
 	void ReleasePaletteExpandedTexture()
 	{
 		if (paletteExpandedTexture_ != nullptr && device_ != nullptr)
@@ -540,6 +570,18 @@ private:
 			SDL_ReleaseGPUTransferBuffer(device_, paletteTransferBuffer_);
 		indexTransferBuffer_ = nullptr;
 		paletteTransferBuffer_ = nullptr;
+	}
+
+	void ReleaseLightingTransferBuffers()
+	{
+		if (lightTransferBuffer_ != nullptr && device_ != nullptr)
+			SDL_ReleaseGPUTransferBuffer(device_, lightTransferBuffer_);
+		if (shadowTransferBuffer_ != nullptr && device_ != nullptr)
+			SDL_ReleaseGPUTransferBuffer(device_, shadowTransferBuffer_);
+		lightTransferBuffer_ = nullptr;
+		shadowTransferBuffer_ = nullptr;
+		lightTransferBufferSize_ = 0;
+		shadowTransferBufferSize_ = 0;
 	}
 
 	void ReleasePalettePipelineResources()
@@ -607,7 +649,7 @@ private:
 			palettePipelineFailed_ = true;
 			return false;
 		}
-		SDL_GPUShader *fragmentShader = CreateShader(fragmentShaderAsset, SDL_GPU_SHADERSTAGE_FRAGMENT, 2);
+		SDL_GPUShader *fragmentShader = CreateShader(fragmentShaderAsset, SDL_GPU_SHADERSTAGE_FRAGMENT, 4);
 		if (fragmentShader == nullptr) {
 			SDL_ReleaseGPUShader(device_, vertexShader);
 			palettePipelineFailed_ = true;
@@ -798,6 +840,49 @@ private:
 		return true;
 	}
 
+	[[nodiscard]] bool EnsureLightingTexture(SDL_GPUTexture *&texture, int &currentWidth, int &currentHeight, const Size size, const SDL_GPUTextureFormat format, const char *name)
+	{
+		if (texture != nullptr && currentWidth == size.width && currentHeight == size.height)
+			return true;
+
+		if (!SDL_GPUTextureSupportsFormat(device_, format, SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_SAMPLER)) {
+			Log("SDL_GPU palette compositor cannot create {} texture; falling back to CPU palette composition", name);
+			return false;
+		}
+
+		if (texture != nullptr && device_ != nullptr)
+			SDL_ReleaseGPUTexture(device_, texture);
+		texture = nullptr;
+		currentWidth = 0;
+		currentHeight = 0;
+
+		const SDL_GPUTextureCreateInfo createInfo {
+			SDL_GPU_TEXTURETYPE_2D,
+			format,
+			SDL_GPU_TEXTUREUSAGE_SAMPLER,
+			static_cast<uint32_t>(size.width),
+			static_cast<uint32_t>(size.height),
+			1,
+			1,
+			SDL_GPU_SAMPLECOUNT_1,
+			0,
+		};
+		texture = SDL_CreateGPUTexture(device_, &createInfo);
+		if (texture == nullptr) {
+			Log("SDL_GPU palette compositor could not create {} texture: {}", name, SDL_GetError());
+			return false;
+		}
+		currentWidth = size.width;
+		currentHeight = size.height;
+		return true;
+	}
+
+	[[nodiscard]] bool EnsureLightingTextures(const Size size)
+	{
+		return EnsureLightingTexture(lightTexture_, lightTextureWidth_, lightTextureHeight_, size, LightTextureFormat, "light")
+		    && EnsureLightingTexture(shadowTexture_, shadowTextureWidth_, shadowTextureHeight_, size, ShadowTextureFormat, "shadow");
+	}
+
 	[[nodiscard]] bool EnsureIndexedTransferBuffer(const uint32_t size)
 	{
 		if (indexTransferBuffer_ != nullptr && indexTransferBufferSize_ >= size)
@@ -840,6 +925,30 @@ private:
 		return true;
 	}
 
+	[[nodiscard]] bool EnsureLightingTransferBuffer(SDL_GPUTransferBuffer *&buffer, uint32_t &currentSize, const uint32_t size, const char *name)
+	{
+		if (buffer != nullptr && currentSize >= size)
+			return true;
+
+		if (buffer != nullptr && device_ != nullptr)
+			SDL_ReleaseGPUTransferBuffer(device_, buffer);
+		buffer = nullptr;
+		currentSize = 0;
+
+		const SDL_GPUTransferBufferCreateInfo createInfo {
+			SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+			size,
+			0,
+		};
+		buffer = SDL_CreateGPUTransferBuffer(device_, &createInfo);
+		if (buffer == nullptr) {
+			Log("SDL_GPU palette compositor could not create {} transfer buffer: {}", name, SDL_GetError());
+			return false;
+		}
+		currentSize = size;
+		return true;
+	}
+
 	[[nodiscard]] bool CopyIndexBufferToTransferBuffer(const IndexBufferView &indexBuffer, const Size logicalSize, const uint32_t uploadSize)
 	{
 		void *mapped = SDL_MapGPUTransferBuffer(device_, indexTransferBuffer_, true);
@@ -877,31 +986,77 @@ private:
 		return true;
 	}
 
-	[[nodiscard]] bool UploadIndexedInputs(const CompositionFrame &frame)
+	[[nodiscard]] bool CopyLightingBufferToTransferBuffer(const CompositionLightingBufferView &view, SDL_GPUTransferBuffer *transferBuffer, const uint32_t uploadSize, const char *name)
 	{
-		if (!available_ || frame.indexBuffer.pixels == nullptr || frame.logicalSize.width <= 0 || frame.logicalSize.height <= 0)
+		void *mapped = SDL_MapGPUTransferBuffer(device_, transferBuffer, true);
+		if (mapped == nullptr) {
+			Log("SDL_GPU palette compositor could not map {} transfer buffer: {}", name, SDL_GetError());
 			return false;
-		if (frame.indexBuffer.width < frame.logicalSize.width || frame.indexBuffer.height < frame.logicalSize.height || frame.indexBuffer.pitch < frame.logicalSize.width)
+		}
+		std::memcpy(mapped, view.pixels, uploadSize);
+		SDL_UnmapGPUTransferBuffer(device_, transferBuffer);
+		return true;
+	}
+
+	[[nodiscard]] bool LightingInputsAreUsable(const CompositionLightingInputs *lightingInputs, const Size logicalSize) const
+	{
+		if (lightingInputs == nullptr || !lightingInputs->light.IsValid() || !lightingInputs->shadow.IsValid())
+			return false;
+		if (lightingInputs->light.size != logicalSize || lightingInputs->shadow.size != logicalSize)
+			return false;
+		if (lightingInputs->light.format != CompositionLightingBufferFormat::Rgba8 || lightingInputs->shadow.format != CompositionLightingBufferFormat::Alpha8)
+			return false;
+		if (lightingInputs->light.pitch < logicalSize.width * 4 || lightingInputs->light.pitch % 4 != 0)
+			return false;
+		if (lightingInputs->shadow.pitch < logicalSize.width)
+			return false;
+		return true;
+	}
+
+	[[nodiscard]] bool UploadIndexedInputs(const AcceleratedPaletteFrame &frame)
+	{
+		const CompositionFrame &composition = frame.composition;
+		if (!available_ || composition.indexBuffer.pixels == nullptr || composition.logicalSize.width <= 0 || composition.logicalSize.height <= 0)
+			return false;
+		if (composition.indexBuffer.width < composition.logicalSize.width || composition.indexBuffer.height < composition.logicalSize.height || composition.indexBuffer.pitch < composition.logicalSize.width)
+			return false;
+		if (!LightingInputsAreUsable(frame.lighting, composition.logicalSize))
 			return false;
 
-		const uint64_t uploadSize64 = static_cast<uint64_t>(frame.indexBuffer.pitch) * static_cast<uint64_t>(frame.logicalSize.height);
+		const uint64_t uploadSize64 = static_cast<uint64_t>(composition.indexBuffer.pitch) * static_cast<uint64_t>(composition.logicalSize.height);
 		if (uploadSize64 > std::numeric_limits<uint32_t>::max())
 			return false;
 		const uint32_t indexUploadSize = static_cast<uint32_t>(uploadSize64);
+		const uint64_t lightUploadSize64 = static_cast<uint64_t>(frame.lighting->light.pitch) * static_cast<uint64_t>(composition.logicalSize.height);
+		const uint64_t shadowUploadSize64 = static_cast<uint64_t>(frame.lighting->shadow.pitch) * static_cast<uint64_t>(composition.logicalSize.height);
+		if (lightUploadSize64 > std::numeric_limits<uint32_t>::max() || shadowUploadSize64 > std::numeric_limits<uint32_t>::max())
+			return false;
+		const uint32_t lightUploadSize = static_cast<uint32_t>(lightUploadSize64);
+		const uint32_t shadowUploadSize = static_cast<uint32_t>(shadowUploadSize64);
 
-		if (!EnsureIndexTexture(frame.logicalSize.width, frame.logicalSize.height))
+		if (!EnsureIndexTexture(composition.logicalSize.width, composition.logicalSize.height))
 			return false;
 		if (!EnsurePaletteTexture())
+			return false;
+		if (!EnsureLightingTextures(composition.logicalSize))
 			return false;
 		if (!EnsureIndexedTransferBuffer(indexUploadSize))
 			return false;
 		if (!EnsurePaletteTransferBuffer())
 			return false;
-		if (!CopyIndexBufferToTransferBuffer(frame.indexBuffer, frame.logicalSize, indexUploadSize))
+		if (!EnsureLightingTransferBuffer(lightTransferBuffer_, lightTransferBufferSize_, lightUploadSize, "light"))
+			return false;
+		if (!EnsureLightingTransferBuffer(shadowTransferBuffer_, shadowTransferBufferSize_, shadowUploadSize, "shadow"))
+			return false;
+		if (!CopyIndexBufferToTransferBuffer(composition.indexBuffer, composition.logicalSize, indexUploadSize))
+			return false;
+		if (!CopyLightingBufferToTransferBuffer(frame.lighting->light, lightTransferBuffer_, lightUploadSize, "light"))
+			return false;
+		if (!CopyLightingBufferToTransferBuffer(frame.lighting->shadow, shadowTransferBuffer_, shadowUploadSize, "shadow"))
 			return false;
 
-		const bool uploadPalette = !paletteTextureUploaded_ || uploadedPaletteVersion_ != frame.palette.version;
-		if (uploadPalette && !CopyPaletteToTransferBuffer(frame.palette))
+		const bool uploadPalette = !paletteTextureUploaded_ || uploadedPaletteVersion_ != composition.palette.version;
+		if (uploadPalette && !CopyPaletteToTransferBuffer(composition.palette))
 			return false;
 
 		SDL_GPUCommandBuffer *commandBuffer = SDL_AcquireGPUCommandBuffer(device_);
@@ -920,8 +1075,8 @@ private:
 		const SDL_GPUTextureTransferInfo indexSource {
 			indexTransferBuffer_,
 			0,
-			static_cast<uint32_t>(frame.indexBuffer.pitch),
-			static_cast<uint32_t>(frame.logicalSize.height),
+			static_cast<uint32_t>(composition.indexBuffer.pitch),
+			static_cast<uint32_t>(composition.logicalSize.height),
 		};
 		const SDL_GPUTextureRegion indexDestination {
 			indexTexture_,
@@ -930,8 +1085,8 @@ private:
 			0,
 			0,
 			0,
-			static_cast<uint32_t>(frame.logicalSize.width),
-			static_cast<uint32_t>(frame.logicalSize.height),
+			static_cast<uint32_t>(composition.logicalSize.width),
+			static_cast<uint32_t>(composition.logicalSize.height),
 			1,
 		};
 		SDL_UploadToGPUTexture(copyPass, &indexSource, &indexDestination, true);
@@ -956,6 +1111,43 @@ private:
 			};
 			SDL_UploadToGPUTexture(copyPass, &paletteSource, &paletteDestination, true);
 		}
+		const SDL_GPUTextureTransferInfo lightSource {
+			lightTransferBuffer_,
+			0,
+			static_cast<uint32_t>(frame.lighting->light.pitch / 4),
+			static_cast<uint32_t>(composition.logicalSize.height),
+		};
+		const SDL_GPUTextureRegion lightDestination {
+			lightTexture_,
+			0,
+			0,
+			0,
+			0,
+			0,
+			static_cast<uint32_t>(composition.logicalSize.width),
+			static_cast<uint32_t>(composition.logicalSize.height),
+			1,
+		};
+		SDL_UploadToGPUTexture(copyPass, &lightSource, &lightDestination, true);
+
+		const SDL_GPUTextureTransferInfo shadowSource {
+			shadowTransferBuffer_,
+			0,
+			static_cast<uint32_t>(frame.lighting->shadow.pitch),
+			static_cast<uint32_t>(composition.logicalSize.height),
+		};
+		const SDL_GPUTextureRegion shadowDestination {
+			shadowTexture_,
+			0,
+			0,
+			0,
+			0,
+			0,
+			static_cast<uint32_t>(composition.logicalSize.width),
+			static_cast<uint32_t>(composition.logicalSize.height),
+			1,
+		};
+		SDL_UploadToGPUTexture(copyPass, &shadowSource, &shadowDestination, true);
 		SDL_EndGPUCopyPass(copyPass);
 
 		if (!SDL_SubmitGPUCommandBuffer(commandBuffer)) {
@@ -965,7 +1157,7 @@ private:
 
 		if (uploadPalette) {
 			paletteTextureUploaded_ = true;
-			uploadedPaletteVersion_ = frame.palette.version;
+			uploadedPaletteVersion_ = composition.palette.version;
 		}
 		return true;
 	}
@@ -1089,17 +1281,22 @@ private:
 	SDL_GPUTexture *indexTexture_ = nullptr;
 	SDL_GPUTexture *paletteTexture_ = nullptr;
 	SDL_GPUTexture *paletteExpandedTexture_ = nullptr;
+	SDL_GPUTexture *lightTexture_ = nullptr;
+	SDL_GPUTexture *shadowTexture_ = nullptr;
 	SDL_GPUGraphicsPipeline *palettePipeline_ = nullptr;
 	SDL_GPUSampler *indexSampler_ = nullptr;
 	SDL_GPUSampler *paletteSampler_ = nullptr;
 	SDL_GPUTransferBuffer *transferBuffer_ = nullptr;
 	SDL_GPUTransferBuffer *indexTransferBuffer_ = nullptr;
 	SDL_GPUTransferBuffer *paletteTransferBuffer_ = nullptr;
+	SDL_GPUTransferBuffer *lightTransferBuffer_ = nullptr;
+	SDL_GPUTransferBuffer *shadowTransferBuffer_ = nullptr;
 	bool windowClaimed_ = false;
 	bool available_ = false;
 	bool presentModeInitialized_ = false;
 	bool loggedIndexedDeferral_ = false;
 	bool loggedIndexedPresentation_ = false;
+	bool loggedLightingInputs_ = false;
 	bool palettePipelineFailed_ = false;
 	bool paletteTextureUploaded_ = false;
 	int outputTextureWidth_ = 0;
@@ -1108,8 +1305,14 @@ private:
 	int indexTextureHeight_ = 0;
 	int paletteExpandedTextureWidth_ = 0;
 	int paletteExpandedTextureHeight_ = 0;
+	int lightTextureWidth_ = 0;
+	int lightTextureHeight_ = 0;
+	int shadowTextureWidth_ = 0;
+	int shadowTextureHeight_ = 0;
 	uint32_t transferBufferSize_ = 0;
 	uint32_t indexTransferBufferSize_ = 0;
+	uint32_t lightTransferBufferSize_ = 0;
+	uint32_t shadowTransferBufferSize_ = 0;
 	uint64_t uploadedPaletteVersion_ = 0;
 	SDL_GPUPresentMode lastPresentMode_ = SDL_GPU_PRESENTMODE_VSYNC;
 	SDL_GPUTextureFormat palettePipelineFormat_ = SDL_GPU_TEXTUREFORMAT_INVALID;
@@ -1139,7 +1342,7 @@ public:
 
 	bool PrepareIndexedFrame(const AcceleratedPaletteFrame &frame) override
 	{
-		return SdlGpuState().PrepareIndexedFrame(frame.composition);
+		return SdlGpuState().PrepareIndexedFrame(frame);
 	}
 
 	bool PrepareOutputSurfaceFrame(const AcceleratedPaletteFrame &frame, SDL_Surface &outputSurface) override
