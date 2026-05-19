@@ -84,6 +84,7 @@ enum class FrameRateControl : uint8_t {
 enum class RenderFrameCompositorBackend : uint8_t {
 	CpuPalette = 0,
 	OpenGlPalette = 1,
+	SdlGpuPalette = 2,
 };
 
 enum class Resampler : uint8_t {

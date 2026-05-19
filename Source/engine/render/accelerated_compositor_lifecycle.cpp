@@ -11,6 +11,7 @@
 
 #include "engine/render/frame_compositor.hpp"
 #include "engine/render/opengl_palette_compositor.hpp"
+#include "engine/render/sdl_gpu_palette_compositor.hpp"
 #include "options.h"
 
 namespace devilution {
@@ -53,7 +54,7 @@ void NoopShutdown()
 {
 }
 
-constexpr std::array<AcceleratedCompositorBackendDescriptor, 2> AcceleratedCompositorBackends {
+constexpr std::array<AcceleratedCompositorBackendDescriptor, 3> AcceleratedCompositorBackends {
 	{
 	    {
 	        RenderFrameCompositorBackend::CpuPalette,
@@ -76,6 +77,17 @@ constexpr std::array<AcceleratedCompositorBackendDescriptor, 2> AcceleratedCompo
 	        OpenGlPaletteCompositorIsActive,
 	        ShutdownOpenGlPaletteCompositor,
 	        CreateOpenGlPaletteCompositorBackend,
+	    },
+	    {
+	        RenderFrameCompositorBackend::SdlGpuPalette,
+	        AcceleratedCompositorApi::SdlGpu,
+	        SdlGpuPaletteCompositorRequested,
+	        SdlGpuPaletteCompositorWindowRequested,
+	        ConfigureSdlGpuPaletteCompositorWindow,
+	        ReinitializeSdlGpuPaletteCompositor,
+	        SdlGpuPaletteCompositorIsActive,
+	        ShutdownSdlGpuPaletteCompositor,
+	        CreateSdlGpuPaletteCompositorBackend,
 	    },
 	},
 };

@@ -124,6 +124,10 @@ option(DEVILUTIONX_OPENGL_PALETTE_COMPOSITOR "Build the experimental macOS OpenG
 if(DEVILUTIONX_OPENGL_PALETTE_COMPOSITOR AND (USE_SDL1 OR NOT APPLE))
   message(FATAL_ERROR "DEVILUTIONX_OPENGL_PALETTE_COMPOSITOR currently supports only macOS SDL2/SDL3 builds")
 endif()
+option(DEVILUTIONX_SDL_GPU_PALETTE_COMPOSITOR "Build the experimental SDL_GPU palette compositor backend" OFF)
+if(DEVILUTIONX_SDL_GPU_PALETTE_COMPOSITOR AND NOT USE_SDL3)
+  message(FATAL_ERROR "DEVILUTIONX_SDL_GPU_PALETTE_COMPOSITOR requires USE_SDL3")
+endif()
 
 if(USE_SDL1)
   # SDL_image in SDL1 does not support PNG, making PCX the only option.

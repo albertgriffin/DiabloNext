@@ -832,6 +832,7 @@ ExperimentalOptions::ExperimentalOptions()
           {
               { RenderFrameCompositorBackend::CpuPalette, N_("CPU Palette") },
               { RenderFrameCompositorBackend::OpenGlPalette, N_("OpenGL Palette") },
+              { RenderFrameCompositorBackend::SdlGpuPalette, N_("SDL_GPU Palette") },
           })
     , renderFrameCompositorDiagnosticTransform("Render Compositor Diagnostic Transform", OptionEntryFlags::None, N_("Render Compositor Diagnostic Transform"), N_("Apply a visible RGB transform after palette expansion to verify the experimental compositor path."), false)
     , renderLayerDiagnosticMode("Render Layer Diagnostics", OptionEntryFlags::None, N_("Render Layer Diagnostics"), N_("Visualize render layer ownership in the experimental frame compositor."), RenderLayerDiagnosticMode::Off,

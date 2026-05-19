@@ -94,6 +94,7 @@ set(libdevilutionx_SRCS
   engine/render/frame_compositor.cpp
   engine/render/opengl_palette_compositor.cpp
   engine/render/render_perf.cpp
+  engine/render/sdl_gpu_palette_compositor.cpp
   engine/render/scrollrt.cpp
 
   items/validation.cpp
