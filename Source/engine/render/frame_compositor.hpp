@@ -17,7 +17,11 @@
 #endif
 
 #include "engine/rectangle.hpp"
+#include "engine/render/render_layer_diagnostics.hpp"
 #include "engine/size.hpp"
+#ifdef BUILD_TESTING
+#include "utils/attributes.h"
+#endif
 
 namespace devilution {
 
@@ -45,6 +49,16 @@ struct DirtyRectList {
 	bool fullFrame = false;
 };
 
+struct CompositionFrame {
+	Size logicalSize;
+	IndexBufferView indexBuffer;
+	PaletteSnapshot palette;
+	DirtyRectList dirtyRects;
+	bool diagnosticTransform = false;
+	RenderLayerDiagnosticMode renderLayerDiagnosticMode = RenderLayerDiagnosticMode::Off;
+	RenderLayerMapView renderLayerMap;
+};
+
 [[nodiscard]] IndexBufferView MakeIndexBufferView(const SDL_Surface &surface);
 [[nodiscard]] PaletteSnapshot MakePaletteSnapshot(const std::array<SDL_Color, 256> &palette, uint64_t version);
 
@@ -56,6 +70,7 @@ public:
 	virtual void SubmitIndexBuffer(IndexBufferView indexBuffer) = 0;
 	virtual void SubmitPalette(const PaletteSnapshot &palette) = 0;
 	virtual void SubmitDirtyRects(const DirtyRectList &dirtyRects) = 0;
+	virtual void Compose(const CompositionFrame &frame) = 0;
 	virtual void Compose() = 0;
 	virtual void Present() = 0;
 };
@@ -66,6 +81,7 @@ public:
 	void SubmitIndexBuffer(IndexBufferView indexBuffer) override;
 	void SubmitPalette(const PaletteSnapshot &palette) override;
 	void SubmitDirtyRects(const DirtyRectList &dirtyRects) override;
+	void Compose(const CompositionFrame &frame) override;
 	void Compose() override;
 	void Present() override;
 
@@ -77,7 +93,7 @@ public:
 	[[nodiscard]] const DirtyRectList &GetDirtyRects() const;
 
 private:
-	void ComposeRect(Rectangle rect);
+	[[nodiscard]] bool ComposeRect(Rectangle rect);
 
 	Size logicalSize_ {};
 	IndexBufferView indexBuffer_ {};
@@ -85,6 +101,12 @@ private:
 	DirtyRectList dirtyRects_ {};
 	SDL_Surface *outputSurface_ = nullptr;
 	bool diagnosticTransformEnabled_ = false;
+	RenderLayerDiagnosticMode renderLayerDiagnosticMode_ = RenderLayerDiagnosticMode::Off;
+	RenderLayerMapView renderLayerMap_ {};
+	bool hasComposedFrame_ = false;
+	uint64_t lastComposedPaletteVersion_ = 0;
+	bool lastComposedDiagnosticTransformEnabled_ = false;
+	RenderLayerDiagnosticMode lastRenderLayerDiagnosticMode_ = RenderLayerDiagnosticMode::Off;
 };
 
 [[nodiscard]] bool FrameCompositionEnabled();
@@ -92,5 +114,9 @@ void SubmitFrameCompositionDirtyRect(Rectangle rect);
 void SubmitFrameCompositionFullFrame();
 void ResetFrameCompositionDirtyRects();
 void ComposeFrameToOutput(SDL_Surface *outputSurface);
+
+#ifdef BUILD_TESTING
+void DVL_API_FOR_TEST SetFrameCompositorThreadCountOverrideForTesting(int threadCount);
+#endif
 
 } // namespace devilution

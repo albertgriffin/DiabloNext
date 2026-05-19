@@ -27,6 +27,7 @@
 #include "tables/monstdat.h"
 #include "tables/spelldat.h"
 #include "tables/textdat.h"
+#include "utils/attributes.h"
 #include "utils/language.h"
 
 namespace devilution {
@@ -490,9 +491,9 @@ struct Monster { // note: missing field _mAFNum
 };
 
 extern size_t LevelMonsterTypeCount;
-extern Monster Monsters[MaxMonsters];
-extern unsigned ActiveMonsters[MaxMonsters];
-extern size_t ActiveMonsterCount;
+extern DVL_API_FOR_TEST Monster Monsters[MaxMonsters];
+extern DVL_API_FOR_TEST unsigned ActiveMonsters[MaxMonsters];
+extern DVL_API_FOR_TEST size_t ActiveMonsterCount;
 extern int MonsterKillCounts[NUM_MAX_MTYPES];
 extern bool sgbSaveSoundOn;
 

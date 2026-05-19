@@ -34,8 +34,8 @@
 #include "engine/point.hpp"
 #include "engine/render/clx_render.hpp"
 #include "engine/render/dun_render.hpp"
-#include "players/combat.hpp"
 #include "engine/render/light_render.hpp"
+#include "engine/render/render_layer.hpp"
 #include "engine/render/text_render.hpp"
 #include "engine/trn.hpp"
 #include "engine/world_tile.hpp"
@@ -60,6 +60,7 @@
 #include "panels/partypanel.hpp"
 #include "panels/spell_list.hpp"
 #include "player.h"
+#include "players/combat.hpp"
 #include "plrmsg.h"
 #include "qol/chatlog.h"
 #include "qol/floatingnumbers.h"
@@ -227,6 +228,9 @@ void UndrawCursor(const Surface &out)
 {
 	DrawnCursor &cursor = GetDrawnCursor();
 	BlitCursor(&out[cursor.rect.position], out.pitch(), cursor.behindBuffer, cursor.rect.size.width, cursor.rect.size.width, cursor.rect.size.height);
+	if (cursor.behindLayerBufferValid)
+		RestoreRenderLayerMapRegion(cursor.rect, cursor.behindLayerBuffer, cursor.rect.size.width);
+	cursor.behindLayerBufferValid = false;
 	PrevCursorRect = cursor.rect;
 }
 
@@ -327,6 +331,8 @@ void DrawCursor(const Surface &out)
 		return;
 
 	BlitCursor(cursor.behindBuffer, rect.size.width, &out[rect.position], out.pitch(), rect.size.width, rect.size.height);
+	cursor.behindLayerBufferValid = SaveRenderLayerMapRegion(rect, cursor.behindLayerBuffer, rect.size.width);
+	RenderLayerScope renderLayer(RenderLayer::Cursor, rect);
 	DrawSoftwareCursor(out, cursPosition + Displacement { 0, cursSize.height - 1 }, pcurs);
 }
 
@@ -1169,6 +1175,7 @@ void Zoom(const Surface &out)
 	if ((out.h() % 2) == 1) {
 		memcpy(dst - out.pitch() + 1, dst + 1, viewportWidth);
 	}
+	MarkRenderLayerRect(out, { { viewportOffsetX, 0 }, { viewportWidth, out.h() } });
 }
 
 Displacement tileOffset;
@@ -1233,6 +1240,7 @@ void DrawGame(const Surface &fullOut, Point position, Displacement offset)
 	const Surface &out = !*GetOptions().Graphics.zoom
 	    ? fullOut.subregionY(0, gnViewportHeight)
 	    : fullOut.subregionY(0, (gnViewportHeight + 1) / 2);
+	RenderLayerScope renderLayer(RenderLayer::World, { { 0, 0 }, { fullOut.w(), out.h() } });
 
 	int columns = tileColumns;
 	int rows = tileRows;
@@ -1338,71 +1346,79 @@ void DrawView(const Surface &out, Point startPosition)
 	Displacement offset = {};
 	CalcFirstTilePosition(startPosition, offset);
 	DrawGame(out, startPosition, offset);
-	if (AutomapActive) {
-		DrawAutomap(out.subregionY(0, gnViewportHeight));
+	{
+		RenderLayerScope renderLayer(RenderLayer::WorldOverlay, { { 0, 0 }, { out.w(), gnViewportHeight } });
+		if (AutomapActive) {
+			DrawAutomap(out.subregionY(0, gnViewportHeight));
+		}
+		DrawCombatIndicator(out.subregionY(0, gnViewportHeight));
 	}
-	DrawCombatIndicator(out.subregionY(0, gnViewportHeight));
 #ifdef _DEBUG
-	bool debugGridTextNeeded = IsDebugGridTextNeeded();
-	if (debugGridTextNeeded || DebugGrid) {
-		// force redrawing or debug stuff stays on panel on 640x480 resolution
-		RedrawEverything();
-		std::string debugGridText;
-		bool megaTiles = IsDebugGridInMegatiles();
+	{
+		RenderLayerScope renderLayer(RenderLayer::Debug, { { 0, 0 }, { out.w(), gnViewportHeight } });
+		bool debugGridTextNeeded = IsDebugGridTextNeeded();
+		if (debugGridTextNeeded || DebugGrid) {
+			// force redrawing or debug stuff stays on panel on 640x480 resolution
+			RedrawEverything();
+			std::string debugGridText;
+			bool megaTiles = IsDebugGridInMegatiles();
 
-		for (auto [dunCoordVal, pixelCoords] : DebugCoordsMap) {
-			Point dunCoords = { dunCoordVal % MAXDUNX, dunCoordVal / MAXDUNX };
-			if (megaTiles && (dunCoords.x % 2 == 1 || dunCoords.y % 2 == 1))
-				continue;
-			if (megaTiles)
-				pixelCoords += Displacement { 0, TILE_HEIGHT / 2 };
-			if (*GetOptions().Graphics.zoom)
-				pixelCoords *= 2;
-			if (debugGridTextNeeded && GetDebugGridText(dunCoords, debugGridText)) {
-				Size tileSize = { TILE_WIDTH, TILE_HEIGHT };
+			for (auto [dunCoordVal, pixelCoords] : DebugCoordsMap) {
+				Point dunCoords = { dunCoordVal % MAXDUNX, dunCoordVal / MAXDUNX };
+				if (megaTiles && (dunCoords.x % 2 == 1 || dunCoords.y % 2 == 1))
+					continue;
+				if (megaTiles)
+					pixelCoords += Displacement { 0, TILE_HEIGHT / 2 };
 				if (*GetOptions().Graphics.zoom)
-					tileSize *= 2;
-				DrawString(out, debugGridText, { pixelCoords - Displacement { 0, tileSize.height }, tileSize },
-				    { .flags = UiFlags::ColorRed | UiFlags::AlignCenter | UiFlags::VerticalCenter });
-			}
-			if (DebugGrid) {
-				int halfTileWidth = TILE_WIDTH / 2;
-				int halfTileHeight = TILE_HEIGHT / 2;
-				if (*GetOptions().Graphics.zoom) {
-					halfTileWidth *= 2;
-					halfTileHeight *= 2;
+					pixelCoords *= 2;
+				if (debugGridTextNeeded && GetDebugGridText(dunCoords, debugGridText)) {
+					Size tileSize = { TILE_WIDTH, TILE_HEIGHT };
+					if (*GetOptions().Graphics.zoom)
+						tileSize *= 2;
+					DrawString(out, debugGridText, { pixelCoords - Displacement { 0, tileSize.height }, tileSize },
+					    { .flags = UiFlags::ColorRed | UiFlags::AlignCenter | UiFlags::VerticalCenter });
 				}
-				const Point center { pixelCoords.x + halfTileWidth, pixelCoords.y - halfTileHeight };
+				if (DebugGrid) {
+					int halfTileWidth = TILE_WIDTH / 2;
+					int halfTileHeight = TILE_HEIGHT / 2;
+					if (*GetOptions().Graphics.zoom) {
+						halfTileWidth *= 2;
+						halfTileHeight *= 2;
+					}
+					const Point center { pixelCoords.x + halfTileWidth, pixelCoords.y - halfTileHeight };
 
-				if (megaTiles) {
-					halfTileWidth *= 2;
-					halfTileHeight *= 2;
-				}
+					if (megaTiles) {
+						halfTileWidth *= 2;
+						halfTileHeight *= 2;
+					}
 
-				const uint8_t col = PAL16_BEIGE;
-				for (const auto &[originX, dx] : { std::pair(center.x - halfTileWidth, 1), std::pair(center.x + halfTileWidth, -1) }) {
-					// We only need to draw half of the grid cell boundaries (one triangle).
-					// The other triangle will be drawn when drawing the adjacent grid cells.
-					const int dy = 1;
-					Point from { originX, center.y };
-					int height = halfTileHeight;
-					if (out.InBounds(from) && out.InBounds(from + Displacement { 2 * dx * height, dy * height })) {
-						uint8_t *dst = out.at(from.x, from.y);
-						const int pitch = out.pitch();
-						while (height-- > 0) {
-							*dst = col;
-							dst += dx;
-							*dst = col;
-							dst += dx;
-							dst += static_cast<ptrdiff_t>(dy * pitch);
-						}
-					} else {
-						while (height-- > 0) {
-							out.SetPixel(from, col);
-							from.x += dx;
-							out.SetPixel(from, col);
-							from.x += dx;
-							from.y += dy;
+					const uint8_t col = PAL16_BEIGE;
+					for (const auto &[originX, dx] : { std::pair(center.x - halfTileWidth, 1), std::pair(center.x + halfTileWidth, -1) }) {
+						// We only need to draw half of the grid cell boundaries (one triangle).
+						// The other triangle will be drawn when drawing the adjacent grid cells.
+						const int dy = 1;
+						Point from { originX, center.y };
+						int height = halfTileHeight;
+						if (out.InBounds(from) && out.InBounds(from + Displacement { 2 * dx * height, dy * height })) {
+							uint8_t *dst = out.at(from.x, from.y);
+							const int pitch = out.pitch();
+							while (height-- > 0) {
+								*dst = col;
+								MarkRenderLayerSpan(dst, 1);
+								dst += dx;
+								*dst = col;
+								MarkRenderLayerSpan(dst, 1);
+								dst += dx;
+								dst += static_cast<ptrdiff_t>(dy * pitch);
+							}
+						} else {
+							while (height-- > 0) {
+								out.SetPixel(from, col);
+								from.x += dx;
+								out.SetPixel(from, col);
+								from.x += dx;
+								from.y += dy;
+							}
 						}
 					}
 				}
@@ -1410,69 +1426,75 @@ void DrawView(const Surface &out, Point startPosition)
 		}
 	}
 #endif
-	DrawItemNameLabels(out);
-	DrawMonsterHealthBar(out);
-	DrawFloatingNumbers(out, startPosition, offset);
-
-	if (IsPlayerInStore() && !qtextflag)
-		DrawSText(out);
-	if (invflag) {
-		DrawInv(out);
-	} else if (SpellbookFlag) {
-		DrawSpellBook(out);
+	{
+		RenderLayerScope renderLayer(RenderLayer::WorldOverlay, { { 0, 0 }, { out.w(), gnViewportHeight } });
+		DrawItemNameLabels(out);
+		DrawMonsterHealthBar(out);
+		DrawFloatingNumbers(out, startPosition, offset);
 	}
 
-	DrawDurIcon(out);
+	{
+		RenderLayerScope renderLayer(RenderLayer::Interface);
+		if (IsPlayerInStore() && !qtextflag)
+			DrawSText(out);
+		if (invflag) {
+			DrawInv(out);
+		} else if (SpellbookFlag) {
+			DrawSpellBook(out);
+		}
 
-	DrawLevelButton(out);
+		DrawDurIcon(out);
 
-	if (CharFlag) {
-		DrawChr(out);
-	} else if (QuestLogIsOpen) {
-		DrawQuestLog(out);
-	} else if (IsStashOpen) {
-		DrawStash(out);
-	} else if (IsVisualStoreOpen) {
-		DrawVisualStore(out);
-	}
+		DrawLevelButton(out);
 
-	if (ShowUniqueItemInfoBox) {
-		DrawUniqueInfo(out);
-	}
-	if (qtextflag) {
-		DrawQText(out);
-	}
-	if (SpellSelectFlag) {
-		DrawSpellList(out);
-	}
-	if (DropGoldFlag) {
-		DrawGoldSplit(out);
-	}
-	DrawGoldWithdraw(out);
-	if (HelpFlag) {
-		DrawHelp(out);
-	}
-	if (ChatLogFlag) {
-		DrawChatLog(out);
-	}
-	if (MyPlayerIsDead) {
-		RedBack(out);
-		DrawDeathText(out);
-	} else if (PauseMode != 0) {
-		gmenu_draw_pause(out);
-	}
-	if (IsDiabloMsgAvailable()) {
-		DrawDiabloMsg(out.subregionY(0, out.h() - GetMainPanel().size.height));
-	}
+		if (CharFlag) {
+			DrawChr(out);
+		} else if (QuestLogIsOpen) {
+			DrawQuestLog(out);
+		} else if (IsStashOpen) {
+			DrawStash(out);
+		} else if (IsVisualStoreOpen) {
+			DrawVisualStore(out);
+		}
 
-	DrawControllerModifierHints(out);
-	DrawPlrMsg(out);
-	gmenu_draw(out);
-	doom_draw(out);
-	DrawInfoBox(out);
-	UpdateLifeManaPercent(); // Update life/mana totals before rendering any portion of the flask.
-	DrawLifeFlaskUpper(out);
-	DrawManaFlaskUpper(out);
+		if (ShowUniqueItemInfoBox) {
+			DrawUniqueInfo(out);
+		}
+		if (qtextflag) {
+			DrawQText(out);
+		}
+		if (SpellSelectFlag) {
+			DrawSpellList(out);
+		}
+		if (DropGoldFlag) {
+			DrawGoldSplit(out);
+		}
+		DrawGoldWithdraw(out);
+		if (HelpFlag) {
+			DrawHelp(out);
+		}
+		if (ChatLogFlag) {
+			DrawChatLog(out);
+		}
+		if (MyPlayerIsDead) {
+			RedBack(out);
+			DrawDeathText(out);
+		} else if (PauseMode != 0) {
+			gmenu_draw_pause(out);
+		}
+		if (IsDiabloMsgAvailable()) {
+			DrawDiabloMsg(out.subregionY(0, out.h() - GetMainPanel().size.height));
+		}
+
+		DrawControllerModifierHints(out);
+		DrawPlrMsg(out);
+		gmenu_draw(out);
+		doom_draw(out);
+		DrawInfoBox(out);
+		UpdateLifeManaPercent(); // Update life/mana totals before rendering any portion of the flask.
+		DrawLifeFlaskUpper(out);
+		DrawManaFlaskUpper(out);
+	}
 }
 
 /**
@@ -1480,6 +1502,7 @@ void DrawView(const Surface &out, Point startPosition)
  */
 void DrawFPS(const Surface &out)
 {
+	RenderLayerScope renderLayer(RenderLayer::Debug, { { 8, 8 }, { 120, 16 } });
 	static int framesSinceLastUpdate = 0;
 	static std::string_view formatted {};
 
@@ -1845,7 +1868,11 @@ void scrollrt_draw_game_screen()
 	}
 
 	const Surface &out = GlobalBackBuffer();
-	UndrawCursor(out);
+	BeginRenderLayerFrame(out, *GetOptions().Experimental.renderFrameCompositor && *GetOptions().Experimental.renderLayerDiagnosticMode != RenderLayerDiagnosticMode::Off);
+	{
+		RenderLayerCaptureSuspension renderLayerCaptureSuspension;
+		UndrawCursor(out);
+	}
 	DrawCursor(out);
 	DrawMain(hgt, false, false, false, false, false);
 
@@ -1884,43 +1911,50 @@ void DrawAndBlit()
 	}
 
 	const Surface &out = GlobalBackBuffer();
-	UndrawCursor(out);
+	BeginRenderLayerFrame(out, *GetOptions().Experimental.renderFrameCompositor && *GetOptions().Experimental.renderLayerDiagnosticMode != RenderLayerDiagnosticMode::Off);
+	{
+		RenderLayerCaptureSuspension renderLayerCaptureSuspension;
+		UndrawCursor(out);
+	}
 
 	nthread_UpdateProgressToNextGameTick();
 
 	DrawView(out, ViewPosition);
-	if (drawCtrlPan) {
-		DrawMainPanel(out);
-	}
-	if (drawHealth) {
-		DrawLifeFlaskLower(out, !drawCtrlPan);
-	}
-	if (drawMana) {
-		DrawManaFlaskLower(out, !drawCtrlPan);
+	{
+		RenderLayerScope renderLayer(RenderLayer::Interface);
+		if (drawCtrlPan) {
+			DrawMainPanel(out);
+		}
+		if (drawHealth) {
+			DrawLifeFlaskLower(out, !drawCtrlPan);
+		}
+		if (drawMana) {
+			DrawManaFlaskLower(out, !drawCtrlPan);
 
-		DrawSpell(out);
-	}
-	if (drawControlButtons) {
-		DrawMainPanelButtons(out);
-	}
-	if (drawBelt) {
-		DrawInvBelt(out);
-	}
-	if (drawChatInput) {
-		DrawChatBox(out);
-	}
-	DrawXPBar(out);
-	if (*GetOptions().Gameplay.showHealthValues)
-		DrawFlaskValues(out, { mainPanel.position.x + 134, mainPanel.position.y + 28 }, MyPlayer->_pHitPoints >> 6, MyPlayer->_pMaxHP >> 6);
-	if (*GetOptions().Gameplay.showManaValues)
-		DrawFlaskValues(out, { mainPanel.position.x + mainPanel.size.width - 138, mainPanel.position.y + 28 },
-		    (HasAnyOf(InspectPlayer->_pIFlags, ItemSpecialEffect::NoMana) || MyPlayer->hasNoMana()) ? 0 : MyPlayer->_pMana >> 6,
-		    HasAnyOf(InspectPlayer->_pIFlags, ItemSpecialEffect::NoMana) ? 0 : MyPlayer->_pMaxMana >> 6);
-	if (*GetOptions().Gameplay.floatingInfoBox)
-		DrawFloatingInfoBox(out);
+			DrawSpell(out);
+		}
+		if (drawControlButtons) {
+			DrawMainPanelButtons(out);
+		}
+		if (drawBelt) {
+			DrawInvBelt(out);
+		}
+		if (drawChatInput) {
+			DrawChatBox(out);
+		}
+		DrawXPBar(out);
+		if (*GetOptions().Gameplay.showHealthValues)
+			DrawFlaskValues(out, { mainPanel.position.x + 134, mainPanel.position.y + 28 }, MyPlayer->_pHitPoints >> 6, MyPlayer->_pMaxHP >> 6);
+		if (*GetOptions().Gameplay.showManaValues)
+			DrawFlaskValues(out, { mainPanel.position.x + mainPanel.size.width - 138, mainPanel.position.y + 28 },
+			    (HasAnyOf(InspectPlayer->_pIFlags, ItemSpecialEffect::NoMana) || MyPlayer->hasNoMana()) ? 0 : MyPlayer->_pMana >> 6,
+			    HasAnyOf(InspectPlayer->_pIFlags, ItemSpecialEffect::NoMana) ? 0 : MyPlayer->_pMaxMana >> 6);
+		if (*GetOptions().Gameplay.floatingInfoBox)
+			DrawFloatingInfoBox(out);
 
-	if (*GetOptions().Gameplay.showMultiplayerPartyInfo && PartySidePanelOpen)
-		DrawPartyMemberInfoPanel(out);
+		if (*GetOptions().Gameplay.showMultiplayerPartyInfo && PartySidePanelOpen)
+			DrawPartyMemberInfoPanel(out);
+	}
 
 	DrawCursor(out);
 
@@ -1931,7 +1965,10 @@ void DrawAndBlit()
 	DrawMain(hgt, drawInfoBox, drawHealth, drawMana, drawBelt, drawControlButtons);
 
 #ifdef _DEBUG
-	DrawConsole(out);
+	{
+		RenderLayerScope renderLayer(RenderLayer::Debug);
+		DrawConsole(out);
+	}
 #endif
 
 	RedrawComplete();

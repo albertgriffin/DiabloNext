@@ -24,7 +24,8 @@ concurrency:
 
 jobs:
   build:
-    runs-on: windows-latest
+    # The UWP project and SDL build are pinned to the Visual Studio 2022 v143 toolset.
+    runs-on: windows-2022
     steps:
     - name: Checkout
       uses: actions/checkout@v6

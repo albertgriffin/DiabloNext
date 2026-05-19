@@ -27,6 +27,7 @@
 
 #include "appfat.h"
 #include "controls/controller_buttons.h"
+#include "engine/render/render_layer_diagnostics.hpp"
 #include "engine/size.hpp"
 #include "engine/sound_defs.hpp"
 #include "pack.h"
@@ -563,6 +564,8 @@ struct ExperimentalOptions : OptionCategoryBase {
 	OptionEntryBoolean renderFrameCompositor;
 	/** @brief Apply a visible RGB transform in the experimental frame compositor. */
 	OptionEntryBoolean renderFrameCompositorDiagnosticTransform;
+	/** @brief Visualize render layer ownership in the experimental frame compositor. */
+	OptionEntryEnum<RenderLayerDiagnosticMode> renderLayerDiagnosticMode;
 };
 
 struct GameplayOptions : OptionCategoryBase {

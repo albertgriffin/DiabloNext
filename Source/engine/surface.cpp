@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <cstring>
 
+#include "engine/render/render_layer.hpp"
+
 namespace devilution {
 
 namespace {
@@ -22,20 +24,27 @@ void SurfaceBlit(const Surface &src, SDL_Rect srcRect, const Surface &dst, Point
 	std::uint8_t *dstBuf = &dst[dstPosition];
 	const auto dstPitch = dst.pitch();
 
-	for (unsigned h = srcRect.h; h != 0; --h) {
-		if (SkipColorIndexZero) {
-			for (unsigned w = srcRect.w; w != 0; --w) {
-				if (*srcBuf != 0)
-					*dstBuf = *srcBuf;
-				++srcBuf, ++dstBuf;
+	for (int h = srcRect.h; h != 0; --h) {
+		if constexpr (SkipColorIndexZero) {
+			int spanStart = -1;
+			for (int x = 0; x < srcRect.w; ++x) {
+				if (srcBuf[x] != 0) {
+					dstBuf[x] = srcBuf[x];
+					if (spanStart == -1)
+						spanStart = x;
+				} else if (spanStart != -1) {
+					MarkRenderLayerSpan(dstBuf + spanStart, x - spanStart);
+					spanStart = -1;
+				}
 			}
-			srcBuf += srcPitch - srcRect.w;
-			dstBuf += dstPitch - srcRect.w;
+			if (spanStart != -1)
+				MarkRenderLayerSpan(dstBuf + spanStart, srcRect.w - spanStart);
 		} else {
 			std::memcpy(dstBuf, srcBuf, srcRect.w);
-			srcBuf += srcPitch;
-			dstBuf += dstPitch;
+			MarkRenderLayerSpan(dstBuf, srcRect.w);
 		}
+		srcBuf += srcPitch;
+		dstBuf += dstPitch;
 	}
 }
 

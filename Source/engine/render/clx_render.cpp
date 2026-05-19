@@ -10,6 +10,7 @@
 
 #include "engine/point.hpp"
 #include "engine/render/blit_impl.hpp"
+#include "engine/render/render_layer.hpp"
 #include "engine/surface.hpp"
 #include "utils/attributes.h"
 #include "utils/clx_decode.hpp"
@@ -125,6 +126,7 @@ void DoRenderBackwardsClipY(
 					blitFn(v, dst, src.begin);
 					src.begin += v;
 				}
+				MarkRenderLayerSpan(dst, v);
 			}
 			dst += v;
 			remainingWidth -= v;
@@ -171,6 +173,7 @@ void DoRenderBackwardsClipXY(
 					} else {
 						blitFn(length, dst, src.begin + 1 + remainingLeftClip);
 					}
+					MarkRenderLayerSpan(dst, static_cast<int>(length));
 				}
 				dst += length;
 				remainingWidth -= overshoot;
@@ -191,6 +194,7 @@ void DoRenderBackwardsClipXY(
 				} else {
 					blitFn(length, dst, src.begin + 1);
 				}
+				MarkRenderLayerSpan(dst, static_cast<int>(length));
 			}
 			src.begin = srcEnd;
 			dst += length;
@@ -410,7 +414,9 @@ void RenderClxOutline(const Surface &out, Point position, ClxSprite sprite, uint
 	if (position.x >= 0 && position.x + sprite.width() + 2 < out.w()
 	    && position.y >= 0 && position.y + sprite.height() + 2 < out.h()) {
 		for (const auto &[x, y] : OutlinePixelsCache.outlinePixels) {
-			*out.at(position.x + x, position.y + y) = color;
+			Point pixelPosition { position.x + x, position.y + y };
+			*out.at(pixelPosition.x, pixelPosition.y) = color;
+			MarkRenderLayerPixel(out, pixelPosition);
 		}
 	} else {
 		for (const auto &[x, y] : OutlinePixelsCache.outlinePixels) {

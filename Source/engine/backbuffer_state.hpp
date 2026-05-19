@@ -20,6 +20,8 @@ enum class PanelDrawComponent {
 struct DrawnCursor {
 	Rectangle rect;
 	uint8_t behindBuffer[8192];
+	uint8_t behindLayerBuffer[8192];
+	bool behindLayerBufferValid = false;
 };
 
 void InitBackbufferState();
