@@ -612,12 +612,7 @@ bool SpawnWindow(const char *lpWindowName)
 #endif
 	const bool acceleratedFrameCompositorWindow = AcceleratedFrameCompositorWindowRequested();
 	if (acceleratedFrameCompositorWindow) {
-		ConfigureAcceleratedFrameCompositorWindow();
-#ifdef USE_SDL3
-		flags |= SDL_WINDOW_OPENGL;
-#else
-		flags |= SDL_WINDOW_OPENGL;
-#endif
+		flags |= ConfigureAcceleratedFrameCompositorWindow();
 	}
 	if (*GetOptions().Graphics.upscale) {
 		if (*GetOptions().Graphics.fullscreen) {

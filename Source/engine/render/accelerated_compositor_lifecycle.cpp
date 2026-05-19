@@ -21,7 +21,7 @@ struct AcceleratedCompositorBackendDescriptor {
 	AcceleratedCompositorApi api;
 	bool (*requested)();
 	bool (*windowRequested)();
-	void (*configureWindow)();
+	AcceleratedCompositorWindowFlags (*configureWindow)();
 	bool (*reinitialize)(SDL_Window *window);
 	bool (*active)();
 	void (*shutdown)();
@@ -38,8 +38,9 @@ bool FalsePredicate()
 	return false;
 }
 
-void NoopConfigureWindow()
+AcceleratedCompositorWindowFlags NoopConfigureWindow()
 {
+	return 0;
 }
 
 bool NoopReinitialize(SDL_Window *window)
@@ -135,11 +136,12 @@ bool AcceleratedFrameCompositorWindowRequested()
 	return descriptor != nullptr && descriptor->windowRequested();
 }
 
-void ConfigureAcceleratedFrameCompositorWindow()
+AcceleratedCompositorWindowFlags ConfigureAcceleratedFrameCompositorWindow()
 {
 	const AcceleratedCompositorBackendDescriptor *descriptor = RequestedAcceleratedCompositorBackend();
 	if (descriptor != nullptr)
-		descriptor->configureWindow();
+		return descriptor->configureWindow();
+	return 0;
 }
 
 bool ReinitializeAcceleratedFrameCompositor(SDL_Window *window)

@@ -20,6 +20,12 @@ namespace devilution {
 class IFrameCompositorBackend;
 enum class RenderFrameCompositorBackend : uint8_t;
 
+#ifdef USE_SDL3
+using AcceleratedCompositorWindowFlags = SDL_WindowFlags;
+#else
+using AcceleratedCompositorWindowFlags = int;
+#endif
+
 enum class AcceleratedCompositorApi : uint8_t {
 	None,
 	OpenGl,
@@ -32,7 +38,7 @@ enum class AcceleratedCompositorApi : uint8_t {
 [[nodiscard]] AcceleratedCompositorApi AcceleratedFrameCompositorActiveApi();
 [[nodiscard]] bool AcceleratedFrameCompositorRequested();
 [[nodiscard]] bool AcceleratedFrameCompositorWindowRequested();
-void ConfigureAcceleratedFrameCompositorWindow();
+[[nodiscard]] AcceleratedCompositorWindowFlags ConfigureAcceleratedFrameCompositorWindow();
 [[nodiscard]] bool ReinitializeAcceleratedFrameCompositor(SDL_Window *window);
 [[nodiscard]] bool AcceleratedFrameCompositorIsActive();
 void ShutdownAcceleratedFrameCompositor();
