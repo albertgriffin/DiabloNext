@@ -81,6 +81,11 @@ enum class FrameRateControl : uint8_t {
 	CPUSleep = 2,
 };
 
+enum class RenderFrameCompositorBackend : uint8_t {
+	CpuPalette = 0,
+	OpenGlPalette = 1,
+};
+
 enum class Resampler : uint8_t {
 #ifdef DEVILUTIONX_RESAMPLER_SPEEX
 	Speex = 0,
@@ -560,6 +565,8 @@ struct ExperimentalOptions : OptionCategoryBase {
 
 	/** @brief Use the experimental final frame compositor path. */
 	OptionEntryBoolean renderFrameCompositor;
+	/** @brief Select the experimental final frame compositor backend. */
+	OptionEntryEnum<RenderFrameCompositorBackend> renderFrameCompositorBackend;
 	/** @brief Apply a visible RGB transform in the experimental frame compositor. */
 	OptionEntryBoolean renderFrameCompositorDiagnosticTransform;
 	/** @brief Visualize render layer ownership in the experimental frame compositor. */

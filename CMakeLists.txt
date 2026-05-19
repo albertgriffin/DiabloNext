@@ -120,6 +120,10 @@ endif()
   set(DEVILUTIONX_DISPLAY_TEXTURE_FORMAT "${_texture_format_default}" CACHE STRING "Texture format for DevilutionX textures when using the GPU renderer")
   mark_as_advanced(DEVILUTIONX_DISPLAY_TEXTURE_FORMAT)
 endif()
+option(DEVILUTIONX_OPENGL_PALETTE_COMPOSITOR "Build the experimental macOS OpenGL palette compositor backend" OFF)
+if(DEVILUTIONX_OPENGL_PALETTE_COMPOSITOR AND (USE_SDL1 OR NOT APPLE))
+  message(FATAL_ERROR "DEVILUTIONX_OPENGL_PALETTE_COMPOSITOR currently supports only macOS SDL2/SDL3 builds")
+endif()
 
 if(USE_SDL1)
   # SDL_image in SDL1 does not support PNG, making PCX the only option.

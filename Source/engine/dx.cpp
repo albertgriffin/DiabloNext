@@ -21,6 +21,7 @@
 #include "controls/plrctrls.h"
 #include "engine/palette.h"
 #include "engine/render/frame_compositor.hpp"
+#include "engine/render/opengl_palette_compositor.hpp"
 #include "engine/render/primitive_render.hpp"
 #include "engine/render/render_perf.hpp"
 #include "headless_mode.hpp"
@@ -127,6 +128,8 @@ void dx_cleanup()
 		SDL_HideWindow(ghMainWnd);
 #endif
 
+	ShutdownFrameComposition();
+	ShutdownOpenGlPaletteCompositor();
 	PalSurface = nullptr;
 	PinnedPalSurface = nullptr;
 	Palette = nullptr;
@@ -134,7 +137,7 @@ void dx_cleanup()
 #ifndef USE_SDL1
 	texture = nullptr;
 	FreeVirtualGamepadTextures();
-	if (*GetOptions().Graphics.upscale)
+	if (renderer != nullptr)
 		SDL_DestroyRenderer(renderer);
 #endif
 	SDL_DestroyWindow(ghMainWnd);
@@ -256,7 +259,17 @@ void RenderPresent()
 		return;
 	}
 
-	ComposeFrameToOutput(surface);
+	const bool frameCompositorPresented = ComposeFrameToOutput(surface);
+	if (frameCompositorPresented) {
+		{
+			RenderPerfScope renderPerfScope(RenderPerfPhase::Present);
+			PresentFrameComposition();
+		}
+		if (*GetOptions().Graphics.frameRateControl != FrameRateControl::VerticalSync) {
+			LimitFrameRate();
+		}
+		return;
+	}
 
 #ifndef USE_SDL1
 	if (renderer != nullptr) {
@@ -279,6 +292,7 @@ void RenderPresent()
 			}
 			SDL_RenderPresent(renderer);
 		}
+		PresentFrameComposition();
 
 		if (*GetOptions().Graphics.frameRateControl != FrameRateControl::VerticalSync) {
 			LimitFrameRate();
@@ -299,6 +313,7 @@ void RenderPresent()
 			if (RenderDirectlyToOutputSurface)
 				PalSurface = GetOutputSurface();
 		}
+		PresentFrameComposition();
 		LimitFrameRate();
 	}
 #else
@@ -310,6 +325,7 @@ void RenderPresent()
 	}
 	if (RenderDirectlyToOutputSurface)
 		PalSurface = GetOutputSurface();
+	PresentFrameComposition();
 	LimitFrameRate();
 #endif
 }

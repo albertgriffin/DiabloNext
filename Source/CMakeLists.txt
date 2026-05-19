@@ -89,7 +89,9 @@ set(libdevilutionx_SRCS
   engine/trn.cpp
 
   engine/render/automap_render.cpp
+  engine/render/accelerated_palette_compositor.cpp
   engine/render/frame_compositor.cpp
+  engine/render/opengl_palette_compositor.cpp
   engine/render/render_perf.cpp
   engine/render/scrollrt.cpp
 
@@ -969,6 +971,10 @@ if(NOT TARGET_PLATFORM STREQUAL "dos")
 endif()
 if(DEVILUTIONX_SCREENSHOT_FORMAT STREQUAL DEVILUTIONX_SCREENSHOT_FORMAT_PNG)
   target_link_dependencies(libdevilutionx PUBLIC libdevilutionx_surface_to_png)
+endif()
+if(DEVILUTIONX_OPENGL_PALETTE_COMPOSITOR)
+  find_library(DEVILUTIONX_OPENGL_FRAMEWORK OpenGL REQUIRED)
+  target_link_libraries(libdevilutionx PUBLIC "${DEVILUTIONX_OPENGL_FRAMEWORK}")
 endif()
 
 # Use file GENERATE instead of configure_file because configure_file

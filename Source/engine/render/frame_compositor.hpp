@@ -7,6 +7,8 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
+#include <string_view>
 #include <vector>
 
 #ifdef USE_SDL3
@@ -60,8 +62,25 @@ struct CompositionFrame {
 	RenderLayerMapView renderLayerMap;
 };
 
+enum class FrameCompositorBackendResult : uint8_t {
+	None,
+	UpdatedOutputSurface,
+	Presented,
+};
+
+class IFrameCompositorBackend {
+public:
+	virtual ~IFrameCompositorBackend() = default;
+
+	[[nodiscard]] virtual std::string_view Name() const = 0;
+	[[nodiscard]] virtual bool IsAvailable() const = 0;
+	[[nodiscard]] virtual FrameCompositorBackendResult Compose(const CompositionFrame &frame, SDL_Surface &outputSurface, const std::vector<Rectangle> &rects, RenderPerfCompositionStats &stats) = 0;
+	virtual void Present() { }
+};
+
 [[nodiscard]] IndexBufferView MakeIndexBufferView(const SDL_Surface &surface);
 [[nodiscard]] PaletteSnapshot MakePaletteSnapshot(const std::array<SDL_Color, 256> &palette, uint64_t version);
+[[nodiscard]] std::unique_ptr<IFrameCompositorBackend> CreateCpuFrameCompositorBackend();
 
 class IFrameCompositor {
 public:
@@ -78,6 +97,9 @@ public:
 
 class CpuPaletteCompositor final : public IFrameCompositor {
 public:
+	CpuPaletteCompositor();
+	explicit CpuPaletteCompositor(std::unique_ptr<IFrameCompositorBackend> backend);
+
 	void BeginFrame(Size logicalSize) override;
 	void SubmitIndexBuffer(IndexBufferView indexBuffer) override;
 	void SubmitPalette(const PaletteSnapshot &palette) override;
@@ -91,22 +113,15 @@ public:
 	void SetFullFrameDirty();
 	void ResetDirtyRects();
 	void SetDiagnosticTransformEnabled(bool enabled);
+	void SetBackend(std::unique_ptr<IFrameCompositorBackend> backend);
 	[[nodiscard]] const DirtyRectList &GetDirtyRects() const;
 	[[nodiscard]] const RenderPerfCompositionStats &GetLastCompositionStats() const;
+	[[nodiscard]] FrameCompositorBackendResult GetLastBackendResult() const;
 
 private:
-	struct MappedPaletteCache {
-		bool valid = false;
-		SDL_Surface *outputSurface = nullptr;
-		uintptr_t outputFormatIdentity = 0;
-		uint64_t paletteVersion = 0;
-		bool diagnosticTransform = false;
-		std::array<uint32_t, 256> mappedPalette {};
-	};
+	[[nodiscard]] FrameCompositorBackendResult ComposeRects(const CompositionFrame &frame, const std::vector<Rectangle> &rects);
 
-	[[nodiscard]] const std::array<uint32_t, 256> &GetMappedPalette(bool diagnosticTransform);
-	[[nodiscard]] bool ComposeRect(Rectangle rect);
-
+	std::unique_ptr<IFrameCompositorBackend> backend_;
 	Size logicalSize_ {};
 	IndexBufferView indexBuffer_ {};
 	PaletteSnapshot palette_ {};
@@ -122,15 +137,17 @@ private:
 	bool outputSurfaceChangedSinceComposition_ = false;
 	bool indexBufferChangedSinceComposition_ = false;
 	bool logicalSizeChangedSinceComposition_ = false;
+	FrameCompositorBackendResult lastBackendResult_ = FrameCompositorBackendResult::None;
 	RenderPerfCompositionStats lastCompositionStats_ {};
-	MappedPaletteCache mappedPaletteCache_ {};
 };
 
 [[nodiscard]] bool FrameCompositionEnabled();
 void SubmitFrameCompositionDirtyRect(Rectangle rect);
 void SubmitFrameCompositionFullFrame();
 void ResetFrameCompositionDirtyRects();
-void ComposeFrameToOutput(SDL_Surface *outputSurface);
+[[nodiscard]] bool ComposeFrameToOutput(SDL_Surface *outputSurface);
+void PresentFrameComposition();
+void ShutdownFrameComposition();
 
 #ifdef BUILD_TESTING
 void DVL_API_FOR_TEST SetFrameCompositorThreadCountOverrideForTesting(int threadCount);

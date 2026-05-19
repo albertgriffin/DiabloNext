@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <memory>
 
 #if defined(WINVER) && WINVER <= 0x0500 && (!defined(_WIN32_WINNT) || _WIN32_WINNT == 0)
 #define DEVILUTIONX_LEGACY_WINDOWS_9X 1
@@ -40,6 +41,7 @@
 #include "appfat.h"
 #include "engine/dx.h"
 #include "engine/palette.h"
+#include "engine/render/opengl_palette_compositor.hpp"
 #include "engine/render/render_layer.hpp"
 #include "options.h"
 #include "utils/display.h"
@@ -441,6 +443,195 @@ void AddNormalizedDirtyRect(DirtyRectList &dirtyRects, Rectangle rect)
 	return normalized;
 }
 
+class CpuPaletteCompositorBackend final : public IFrameCompositorBackend {
+public:
+	std::string_view Name() const override
+	{
+		return "cpu-palette";
+	}
+
+	bool IsAvailable() const override
+	{
+		return true;
+	}
+
+	FrameCompositorBackendResult Compose(const CompositionFrame &frame, SDL_Surface &outputSurface, const std::vector<Rectangle> &rects, RenderPerfCompositionStats &stats) override
+	{
+		bool composed = false;
+		for (const Rectangle &rect : rects) {
+			if (ComposeRect(frame, outputSurface, rect, stats))
+				composed = true;
+		}
+		return composed ? FrameCompositorBackendResult::UpdatedOutputSurface : FrameCompositorBackendResult::None;
+	}
+
+private:
+	struct MappedPaletteCache {
+		bool valid = false;
+		SDL_Surface *outputSurface = nullptr;
+		uintptr_t outputFormatIdentity = 0;
+		uint64_t paletteVersion = 0;
+		bool diagnosticTransform = false;
+		std::array<uint32_t, 256> mappedPalette {};
+	};
+
+	[[nodiscard]] const std::array<uint32_t, 256> &GetMappedPalette(SDL_Surface &outputSurface, const PaletteSnapshot &palette, bool diagnosticTransform)
+	{
+		const uintptr_t outputFormatIdentity = OutputSurfaceFormatIdentity(outputSurface);
+		if (mappedPaletteCache_.valid
+		    && mappedPaletteCache_.outputSurface == &outputSurface
+		    && mappedPaletteCache_.outputFormatIdentity == outputFormatIdentity
+		    && mappedPaletteCache_.paletteVersion == palette.version
+		    && mappedPaletteCache_.diagnosticTransform == diagnosticTransform) {
+			return mappedPaletteCache_.mappedPalette;
+		}
+
+		for (size_t i = 0; i < mappedPaletteCache_.mappedPalette.size(); i++) {
+			const RgbColor color = diagnosticTransform ? ApplyDiagnosticTransform(palette.colors[i]) : palette.colors[i];
+			mappedPaletteCache_.mappedPalette[i] = MapRgba(outputSurface, color);
+		}
+		mappedPaletteCache_.valid = true;
+		mappedPaletteCache_.outputSurface = &outputSurface;
+		mappedPaletteCache_.outputFormatIdentity = outputFormatIdentity;
+		mappedPaletteCache_.paletteVersion = palette.version;
+		mappedPaletteCache_.diagnosticTransform = diagnosticTransform;
+		return mappedPaletteCache_.mappedPalette;
+	}
+
+	[[nodiscard]] bool ComposeRect(const CompositionFrame &frame, SDL_Surface &outputSurface, Rectangle rect, RenderPerfCompositionStats &stats)
+	{
+		if (frame.indexBuffer.pixels == nullptr)
+			return false;
+
+		const Size bounds {
+			std::min({ frame.logicalSize.width, frame.indexBuffer.width, outputSurface.w }),
+			std::min({ frame.logicalSize.height, frame.indexBuffer.height, outputSurface.h }),
+		};
+		rect = ClipToBounds(rect, bounds);
+		if (rect.size.width == 0 || rect.size.height == 0)
+			return false;
+
+		const bool mustLock = SDL_MUSTLOCK(&outputSurface);
+		if (mustLock) {
+#ifdef USE_SDL3
+			if (!SDL_LockSurface(&outputSurface)) ErrSdl();
+#else
+			if (SDL_LockSurface(&outputSurface) < 0) ErrSdl();
+#endif
+		}
+
+		const bool renderLayerDiagnosticsEnabled = frame.renderLayerDiagnosticMode != RenderLayerDiagnosticMode::Off && frame.renderLayerMap.pixels != nullptr;
+		const bool renderLayerTintEnabled = renderLayerDiagnosticsEnabled && UsesRenderLayerTint(frame.renderLayerDiagnosticMode);
+		const bool renderLayerOutlineEnabled = renderLayerDiagnosticsEnabled && UsesRenderLayerOutline(frame.renderLayerDiagnosticMode);
+		const std::array<uint32_t, 256> &mappedPalette = GetMappedPalette(outputSurface, frame.palette, frame.diagnosticTransform);
+		std::array<std::array<uint32_t, 256>, RenderLayerDiagnosticColorCount> mappedTintPalettes {};
+		std::array<uint32_t, RenderLayerDiagnosticColorCount> mappedOutlineColors {};
+		if (renderLayerTintEnabled) {
+			for (size_t i = 0; i < mappedPalette.size(); i++) {
+				const RgbColor color = frame.diagnosticTransform ? ApplyDiagnosticTransform(frame.palette.colors[i]) : frame.palette.colors[i];
+				for (size_t colorIndex = 0; colorIndex < mappedTintPalettes.size(); colorIndex++) {
+					RgbColor tintedColor = color;
+					const RgbColor layerColor = RenderLayerDiagnosticColorByIndex(colorIndex);
+					tintedColor.r = static_cast<uint8_t>((static_cast<uint16_t>(tintedColor.r) + layerColor.r) / 2);
+					tintedColor.g = static_cast<uint8_t>((static_cast<uint16_t>(tintedColor.g) + layerColor.g) / 2);
+					tintedColor.b = static_cast<uint8_t>((static_cast<uint16_t>(tintedColor.b) + layerColor.b) / 2);
+					mappedTintPalettes[colorIndex][i] = MapRgba(outputSurface, tintedColor);
+				}
+			}
+		}
+		if (renderLayerOutlineEnabled) {
+			for (size_t colorIndex = 0; colorIndex < mappedOutlineColors.size(); colorIndex++)
+				mappedOutlineColors[colorIndex] = MapRgba(outputSurface, RenderLayerDiagnosticColorByIndex(colorIndex));
+		}
+
+		const int bytesPerPixel = BytesPerPixel(outputSurface);
+		const bool useFast32NoDiagnostics = bytesPerPixel == 4 && !frame.diagnosticTransform && !renderLayerDiagnosticsEnabled;
+		const auto composeRows32NoDiagnostics = [&](const int yBegin, const int yEnd) {
+			for (int y = yBegin; y < yEnd; y++) {
+				const uint8_t *src = frame.indexBuffer.pixels + y * frame.indexBuffer.pitch + rect.position.x;
+				uint32_t *dst = reinterpret_cast<uint32_t *>(
+				    static_cast<uint8_t *>(outputSurface.pixels) + static_cast<ptrdiff_t>(y) * outputSurface.pitch + rect.position.x * sizeof(uint32_t));
+				for (int x = 0; x < rect.size.width; x++) {
+					dst[x] = mappedPalette[src[x]];
+				}
+			}
+		};
+		const auto composeRowsGeneric = [&](const int yBegin, const int yEnd) {
+			for (int y = yBegin; y < yEnd; y++) {
+				const uint8_t *src = frame.indexBuffer.pixels + y * frame.indexBuffer.pitch + rect.position.x;
+				uint8_t *dstRow = static_cast<uint8_t *>(outputSurface.pixels) + static_cast<ptrdiff_t>(y) * outputSurface.pitch + rect.position.x * bytesPerPixel;
+				uint32_t *dst32 = bytesPerPixel == 4 ? reinterpret_cast<uint32_t *>(dstRow) : nullptr;
+				const bool layerRowInBounds = frame.renderLayerMap.pixels != nullptr && y >= 0 && y < frame.renderLayerMap.height;
+				const uint8_t *layerRow = layerRowInBounds ? frame.renderLayerMap.pixels + static_cast<size_t>(y) * frame.renderLayerMap.pitch : nullptr;
+				const uint8_t *layerRowAbove = frame.renderLayerMap.pixels != nullptr && y > 0 && y - 1 < frame.renderLayerMap.height ? frame.renderLayerMap.pixels + static_cast<size_t>(y - 1) * frame.renderLayerMap.pitch : nullptr;
+				const uint8_t *layerRowBelow = frame.renderLayerMap.pixels != nullptr && y + 1 < frame.renderLayerMap.height ? frame.renderLayerMap.pixels + static_cast<size_t>(y + 1) * frame.renderLayerMap.pitch : nullptr;
+				for (int x = 0; x < rect.size.width; x++) {
+					const int outputX = rect.position.x + x;
+					uint32_t pixel = mappedPalette[src[x]];
+					if (renderLayerDiagnosticsEnabled) {
+						uint8_t layerId = UnknownRenderLayerId;
+						if (layerRow != nullptr && outputX >= 0 && outputX < frame.renderLayerMap.width)
+							layerId = layerRow[outputX];
+						const size_t colorIndex = RenderLayerDiagnosticColorIndex(layerId);
+						if (renderLayerTintEnabled)
+							pixel = mappedTintPalettes[colorIndex][src[x]];
+						if (renderLayerOutlineEnabled) {
+							bool isBoundary = layerId == UnknownRenderLayerId;
+							if (!isBoundary) {
+								if (outputX > 0 && layerRow[outputX - 1] != layerId)
+									isBoundary = true;
+								else if (outputX + 1 < frame.renderLayerMap.width && layerRow[outputX + 1] != layerId)
+									isBoundary = true;
+								else if (layerRowAbove != nullptr && layerRowAbove[outputX] != layerId)
+									isBoundary = true;
+								else if (layerRowBelow != nullptr && layerRowBelow[outputX] != layerId)
+									isBoundary = true;
+							}
+							if (isBoundary)
+								pixel = mappedOutlineColors[colorIndex];
+						}
+					}
+					if (dst32 != nullptr) {
+						dst32[x] = pixel;
+					} else {
+						PutPixelBytes(dstRow + x * bytesPerPixel, bytesPerPixel, pixel);
+					}
+				}
+			}
+		};
+		const auto composeRows = [&](const int yBegin, const int yEnd) {
+			if (useFast32NoDiagnostics) {
+				composeRows32NoDiagnostics(yBegin, yEnd);
+			} else {
+				composeRowsGeneric(yBegin, yEnd);
+			}
+		};
+
+		const int threadCount = CompositionThreadCount(rect);
+		stats.selectedThreadCount = std::max(stats.selectedThreadCount, threadCount);
+#if DEVILUTIONX_PARALLEL_COMPOSITION
+		if (threadCount > 1)
+			stats.parallelCompositionUsed = true;
+#endif
+#if DEVILUTIONX_PARALLEL_COMPOSITION
+		if (threadCount == 1) {
+			composeRows(rect.position.y, rect.position.y + rect.size.height);
+		} else {
+			CompositionWorkers().Run(threadCount, rect.position.y, rect.position.y + rect.size.height, composeRows);
+		}
+#else
+		(void)threadCount;
+		composeRows(rect.position.y, rect.position.y + rect.size.height);
+#endif
+
+		if (mustLock)
+			SDL_UnlockSurface(&outputSurface);
+		return true;
+	}
+
+	MappedPaletteCache mappedPaletteCache_ {};
+};
+
 } // namespace
 
 IndexBufferView MakeIndexBufferView(const SDL_Surface &surface)
@@ -473,12 +664,55 @@ PaletteSnapshot MakePaletteSnapshot(const std::array<SDL_Color, 256> &palette, c
 	return snapshot;
 }
 
+std::unique_ptr<IFrameCompositorBackend> CreateCpuFrameCompositorBackend()
+{
+	return std::make_unique<CpuPaletteCompositorBackend>();
+}
+
+namespace {
+
+RenderFrameCompositorBackend CurrentFrameCompositorBackend = RenderFrameCompositorBackend::CpuPalette;
+bool CurrentFrameCompositorBackendInitialized = false;
+
+[[nodiscard]] std::unique_ptr<IFrameCompositorBackend> CreateFrameCompositorBackend(RenderFrameCompositorBackend backend)
+{
+	if (backend == RenderFrameCompositorBackend::OpenGlPalette) {
+		std::unique_ptr<IFrameCompositorBackend> openGlBackend = CreateOpenGlPaletteCompositorBackend();
+		if (openGlBackend != nullptr && openGlBackend->IsAvailable())
+			return openGlBackend;
+	}
+	return CreateCpuFrameCompositorBackend();
+}
+
+void EnsureFrameCompositorBackend()
+{
+	const RenderFrameCompositorBackend requestedBackend = *GetOptions().Experimental.renderFrameCompositorBackend;
+	if (CurrentFrameCompositorBackendInitialized && CurrentFrameCompositorBackend == requestedBackend)
+		return;
+
+	FrameCompositor.SetBackend(CreateFrameCompositorBackend(requestedBackend));
+	CurrentFrameCompositorBackend = requestedBackend;
+	CurrentFrameCompositorBackendInitialized = true;
+}
+
+} // namespace
+
 #ifdef BUILD_TESTING
 void SetFrameCompositorThreadCountOverrideForTesting(const int threadCount)
 {
 	ThreadCountOverrideForTesting = std::max(0, threadCount);
 }
 #endif
+
+CpuPaletteCompositor::CpuPaletteCompositor()
+    : CpuPaletteCompositor(CreateCpuFrameCompositorBackend())
+{
+}
+
+CpuPaletteCompositor::CpuPaletteCompositor(std::unique_ptr<IFrameCompositorBackend> backend)
+    : backend_(std::move(backend))
+{
+}
 
 void CpuPaletteCompositor::BeginFrame(const Size logicalSize)
 {
@@ -542,6 +776,14 @@ void CpuPaletteCompositor::SetDiagnosticTransformEnabled(const bool enabled)
 	diagnosticTransformEnabled_ = enabled;
 }
 
+void CpuPaletteCompositor::SetBackend(std::unique_ptr<IFrameCompositorBackend> backend)
+{
+	backend_ = std::move(backend);
+	hasComposedFrame_ = false;
+	lastBackendResult_ = FrameCompositorBackendResult::None;
+	outputSurfaceChangedSinceComposition_ = true;
+}
+
 const DirtyRectList &CpuPaletteCompositor::GetDirtyRects() const
 {
 	return dirtyRects_;
@@ -552,161 +794,9 @@ const RenderPerfCompositionStats &CpuPaletteCompositor::GetLastCompositionStats(
 	return lastCompositionStats_;
 }
 
-const std::array<uint32_t, 256> &CpuPaletteCompositor::GetMappedPalette(const bool diagnosticTransform)
+FrameCompositorBackendResult CpuPaletteCompositor::GetLastBackendResult() const
 {
-	if (outputSurface_ == nullptr)
-		return mappedPaletteCache_.mappedPalette;
-
-	const uintptr_t outputFormatIdentity = OutputSurfaceFormatIdentity(*outputSurface_);
-	if (mappedPaletteCache_.valid
-	    && mappedPaletteCache_.outputSurface == outputSurface_
-	    && mappedPaletteCache_.outputFormatIdentity == outputFormatIdentity
-	    && mappedPaletteCache_.paletteVersion == palette_.version
-	    && mappedPaletteCache_.diagnosticTransform == diagnosticTransform) {
-		return mappedPaletteCache_.mappedPalette;
-	}
-
-	for (size_t i = 0; i < mappedPaletteCache_.mappedPalette.size(); i++) {
-		const RgbColor color = diagnosticTransform ? ApplyDiagnosticTransform(palette_.colors[i]) : palette_.colors[i];
-		mappedPaletteCache_.mappedPalette[i] = MapRgba(*outputSurface_, color);
-	}
-	mappedPaletteCache_.valid = true;
-	mappedPaletteCache_.outputSurface = outputSurface_;
-	mappedPaletteCache_.outputFormatIdentity = outputFormatIdentity;
-	mappedPaletteCache_.paletteVersion = palette_.version;
-	mappedPaletteCache_.diagnosticTransform = diagnosticTransform;
-	return mappedPaletteCache_.mappedPalette;
-}
-
-bool CpuPaletteCompositor::ComposeRect(Rectangle rect)
-{
-	if (outputSurface_ == nullptr || indexBuffer_.pixels == nullptr)
-		return false;
-
-	const Size bounds {
-		std::min({ logicalSize_.width, indexBuffer_.width, outputSurface_->w }),
-		std::min({ logicalSize_.height, indexBuffer_.height, outputSurface_->h }),
-	};
-	rect = ClipToBounds(rect, bounds);
-	if (rect.size.width == 0 || rect.size.height == 0)
-		return false;
-
-	const bool mustLock = SDL_MUSTLOCK(outputSurface_);
-	if (mustLock) {
-#ifdef USE_SDL3
-		if (!SDL_LockSurface(outputSurface_)) ErrSdl();
-#else
-		if (SDL_LockSurface(outputSurface_) < 0) ErrSdl();
-#endif
-	}
-
-	const bool renderLayerDiagnosticsEnabled = renderLayerDiagnosticMode_ != RenderLayerDiagnosticMode::Off && renderLayerMap_.pixels != nullptr;
-	const bool renderLayerTintEnabled = renderLayerDiagnosticsEnabled && UsesRenderLayerTint(renderLayerDiagnosticMode_);
-	const bool renderLayerOutlineEnabled = renderLayerDiagnosticsEnabled && UsesRenderLayerOutline(renderLayerDiagnosticMode_);
-	const std::array<uint32_t, 256> &mappedPalette = GetMappedPalette(diagnosticTransformEnabled_);
-	std::array<std::array<uint32_t, 256>, RenderLayerDiagnosticColorCount> mappedTintPalettes {};
-	std::array<uint32_t, RenderLayerDiagnosticColorCount> mappedOutlineColors {};
-	if (renderLayerTintEnabled) {
-		for (size_t i = 0; i < mappedPalette.size(); i++) {
-			const RgbColor color = diagnosticTransformEnabled_ ? ApplyDiagnosticTransform(palette_.colors[i]) : palette_.colors[i];
-			for (size_t colorIndex = 0; colorIndex < mappedTintPalettes.size(); colorIndex++) {
-				RgbColor tintedColor = color;
-				const RgbColor layerColor = RenderLayerDiagnosticColorByIndex(colorIndex);
-				tintedColor.r = static_cast<uint8_t>((static_cast<uint16_t>(tintedColor.r) + layerColor.r) / 2);
-				tintedColor.g = static_cast<uint8_t>((static_cast<uint16_t>(tintedColor.g) + layerColor.g) / 2);
-				tintedColor.b = static_cast<uint8_t>((static_cast<uint16_t>(tintedColor.b) + layerColor.b) / 2);
-				mappedTintPalettes[colorIndex][i] = MapRgba(*outputSurface_, tintedColor);
-			}
-		}
-	}
-	if (renderLayerOutlineEnabled) {
-		for (size_t colorIndex = 0; colorIndex < mappedOutlineColors.size(); colorIndex++)
-			mappedOutlineColors[colorIndex] = MapRgba(*outputSurface_, RenderLayerDiagnosticColorByIndex(colorIndex));
-	}
-
-	const int bytesPerPixel = BytesPerPixel(*outputSurface_);
-	const bool useFast32NoDiagnostics = bytesPerPixel == 4 && !diagnosticTransformEnabled_ && !renderLayerDiagnosticsEnabled;
-	const auto composeRows32NoDiagnostics = [&](const int yBegin, const int yEnd) {
-		for (int y = yBegin; y < yEnd; y++) {
-			const uint8_t *src = indexBuffer_.pixels + y * indexBuffer_.pitch + rect.position.x;
-			uint32_t *dst = reinterpret_cast<uint32_t *>(
-			    static_cast<uint8_t *>(outputSurface_->pixels) + static_cast<ptrdiff_t>(y) * outputSurface_->pitch + rect.position.x * sizeof(uint32_t));
-			for (int x = 0; x < rect.size.width; x++) {
-				dst[x] = mappedPalette[src[x]];
-			}
-		}
-	};
-	const auto composeRowsGeneric = [&](const int yBegin, const int yEnd) {
-		for (int y = yBegin; y < yEnd; y++) {
-			const uint8_t *src = indexBuffer_.pixels + y * indexBuffer_.pitch + rect.position.x;
-			uint8_t *dstRow = static_cast<uint8_t *>(outputSurface_->pixels) + static_cast<ptrdiff_t>(y) * outputSurface_->pitch + rect.position.x * bytesPerPixel;
-			uint32_t *dst32 = bytesPerPixel == 4 ? reinterpret_cast<uint32_t *>(dstRow) : nullptr;
-			const bool layerRowInBounds = renderLayerMap_.pixels != nullptr && y >= 0 && y < renderLayerMap_.height;
-			const uint8_t *layerRow = layerRowInBounds ? renderLayerMap_.pixels + static_cast<size_t>(y) * renderLayerMap_.pitch : nullptr;
-			const uint8_t *layerRowAbove = renderLayerMap_.pixels != nullptr && y > 0 && y - 1 < renderLayerMap_.height ? renderLayerMap_.pixels + static_cast<size_t>(y - 1) * renderLayerMap_.pitch : nullptr;
-			const uint8_t *layerRowBelow = renderLayerMap_.pixels != nullptr && y + 1 < renderLayerMap_.height ? renderLayerMap_.pixels + static_cast<size_t>(y + 1) * renderLayerMap_.pitch : nullptr;
-			for (int x = 0; x < rect.size.width; x++) {
-				const int outputX = rect.position.x + x;
-				uint32_t pixel = mappedPalette[src[x]];
-				if (renderLayerDiagnosticsEnabled) {
-					uint8_t layerId = UnknownRenderLayerId;
-					if (layerRow != nullptr && outputX >= 0 && outputX < renderLayerMap_.width)
-						layerId = layerRow[outputX];
-					const size_t colorIndex = RenderLayerDiagnosticColorIndex(layerId);
-					if (renderLayerTintEnabled)
-						pixel = mappedTintPalettes[colorIndex][src[x]];
-					if (renderLayerOutlineEnabled) {
-						bool isBoundary = layerId == UnknownRenderLayerId;
-						if (!isBoundary) {
-							if (outputX > 0 && layerRow[outputX - 1] != layerId)
-								isBoundary = true;
-							else if (outputX + 1 < renderLayerMap_.width && layerRow[outputX + 1] != layerId)
-								isBoundary = true;
-							else if (layerRowAbove != nullptr && layerRowAbove[outputX] != layerId)
-								isBoundary = true;
-							else if (layerRowBelow != nullptr && layerRowBelow[outputX] != layerId)
-								isBoundary = true;
-						}
-						if (isBoundary)
-							pixel = mappedOutlineColors[colorIndex];
-					}
-				}
-				if (dst32 != nullptr) {
-					dst32[x] = pixel;
-				} else {
-					PutPixelBytes(dstRow + x * bytesPerPixel, bytesPerPixel, pixel);
-				}
-			}
-		}
-	};
-	const auto composeRows = [&](const int yBegin, const int yEnd) {
-		if (useFast32NoDiagnostics) {
-			composeRows32NoDiagnostics(yBegin, yEnd);
-		} else {
-			composeRowsGeneric(yBegin, yEnd);
-		}
-	};
-
-	const int threadCount = CompositionThreadCount(rect);
-	lastCompositionStats_.selectedThreadCount = std::max(lastCompositionStats_.selectedThreadCount, threadCount);
-#if DEVILUTIONX_PARALLEL_COMPOSITION
-	if (threadCount > 1)
-		lastCompositionStats_.parallelCompositionUsed = true;
-#endif
-#if DEVILUTIONX_PARALLEL_COMPOSITION
-	if (threadCount == 1) {
-		composeRows(rect.position.y, rect.position.y + rect.size.height);
-	} else {
-		CompositionWorkers().Run(threadCount, rect.position.y, rect.position.y + rect.size.height, composeRows);
-	}
-#else
-	(void)threadCount;
-	composeRows(rect.position.y, rect.position.y + rect.size.height);
-#endif
-
-	if (mustLock)
-		SDL_UnlockSurface(outputSurface_);
-	return true;
+	return lastBackendResult_;
 }
 
 void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
@@ -728,6 +818,7 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 	lastCompositionStats_ = {};
 	lastCompositionStats_.compositorEnabled = true;
 	lastCompositionStats_.layerCaptureEnabled = frame.renderLayerMap.pixels != nullptr;
+	lastBackendResult_ = FrameCompositorBackendResult::None;
 
 	if (logicalSize_.width <= 0 || logicalSize_.height <= 0) {
 		SetRenderPerfCompositionStats(lastCompositionStats_);
@@ -786,29 +877,46 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 		indexBufferChangedSinceComposition_ = false;
 		logicalSizeChangedSinceComposition_ = false;
 	};
+	const auto composeRects = [&](std::vector<Rectangle> rects) {
+		const FrameCompositorBackendResult result = ComposeRects({
+		                                                             logicalSize_,
+		                                                             indexBuffer_,
+		                                                             palette_,
+		                                                             frame.dirtyRects,
+		                                                             diagnosticTransformEnabled_,
+		                                                             renderLayerDiagnosticMode_,
+		                                                             renderLayerMap_,
+		                                                         },
+		    rects);
+		if (result == FrameCompositorBackendResult::None) {
+			return false;
+		}
+		lastBackendResult_ = result;
+		for (const Rectangle &rect : rects) {
+			recordComposedRect(rect);
+		}
+		markComposedFrame();
+		return true;
+	};
 
 	if (fullFrameReason != CompositionFullFrameReason::None) {
 		lastCompositionStats_.fullFrameComposed = true;
 		lastCompositionStats_.fullFrameReason = fullFrameReason;
-		if (ComposeRect({ { 0, 0 }, logicalSize_ })) {
-			recordComposedRect({ { 0, 0 }, logicalSize_ });
-			markComposedFrame();
-		}
+		composeRects({ { { 0, 0 }, logicalSize_ } });
 		SetRenderPerfCompositionStats(lastCompositionStats_);
 		return;
 	}
 
-	bool composed = false;
-	for (const Rectangle &rect : normalizedDirtyRects.dirtyRects.rects) {
-		if (ComposeRect(rect)) {
-			recordComposedRect(rect);
-			composed = true;
-		}
-	}
-	if (composed) {
-		markComposedFrame();
-	}
+	composeRects(normalizedDirtyRects.dirtyRects.rects);
 	SetRenderPerfCompositionStats(lastCompositionStats_);
+}
+
+FrameCompositorBackendResult CpuPaletteCompositor::ComposeRects(const CompositionFrame &frame, const std::vector<Rectangle> &rects)
+{
+	if (rects.empty() || outputSurface_ == nullptr || backend_ == nullptr || !backend_->IsAvailable())
+		return FrameCompositorBackendResult::None;
+
+	return backend_->Compose(frame, *outputSurface_, rects, lastCompositionStats_);
 }
 
 void CpuPaletteCompositor::Compose()
@@ -826,6 +934,8 @@ void CpuPaletteCompositor::Compose()
 
 void CpuPaletteCompositor::Present()
 {
+	if (backend_ != nullptr)
+		backend_->Present();
 	ResetDirtyRects();
 }
 
@@ -851,13 +961,14 @@ void ResetFrameCompositionDirtyRects()
 	FrameCompositor.ResetDirtyRects();
 }
 
-void ComposeFrameToOutput(SDL_Surface *outputSurface)
+bool ComposeFrameToOutput(SDL_Surface *outputSurface)
 {
 	if (!FrameCompositionEnabled()) {
 		SetRenderPerfCompositionStats({});
-		return;
+		return false;
 	}
 
+	EnsureFrameCompositorBackend();
 	FrameCompositor.SetOutputSurface(outputSurface);
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::Compose);
@@ -871,7 +982,23 @@ void ComposeFrameToOutput(SDL_Surface *outputSurface)
 		    CurrentRenderLayerMapView(),
 		});
 	}
+	const FrameCompositorBackendResult backendResult = FrameCompositor.GetLastBackendResult();
+	return backendResult == FrameCompositorBackendResult::Presented
+	    || (backendResult == FrameCompositorBackendResult::None && OpenGlPaletteCompositorIsActive());
+}
+
+void PresentFrameComposition()
+{
+	if (!FrameCompositionEnabled())
+		return;
 	FrameCompositor.Present();
+}
+
+void ShutdownFrameComposition()
+{
+	FrameCompositor.SetBackend(CreateCpuFrameCompositorBackend());
+	CurrentFrameCompositorBackendInitialized = false;
+	CurrentFrameCompositorBackend = RenderFrameCompositorBackend::CpuPalette;
 }
 
 } // namespace devilution

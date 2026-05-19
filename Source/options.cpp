@@ -828,6 +828,11 @@ std::vector<OptionEntryBase *> GraphicsOptions::GetEntries()
 ExperimentalOptions::ExperimentalOptions()
     : OptionCategoryBase("Experimental", N_("Experimental"), N_("Experimental Settings"))
     , renderFrameCompositor("Render Frame Compositor", OptionEntryFlags::CantChangeInGame | OptionEntryFlags::RecreateUI, N_("Render Frame Compositor"), N_("Use the experimental final frame compositor path."), false)
+    , renderFrameCompositorBackend("Render Frame Compositor Backend", OptionEntryFlags::CantChangeInGame | OptionEntryFlags::RecreateUI, N_("Render Frame Compositor Backend"), N_("Select the experimental final frame compositor backend."), RenderFrameCompositorBackend::CpuPalette,
+          {
+              { RenderFrameCompositorBackend::CpuPalette, N_("CPU Palette") },
+              { RenderFrameCompositorBackend::OpenGlPalette, N_("OpenGL Palette") },
+          })
     , renderFrameCompositorDiagnosticTransform("Render Compositor Diagnostic Transform", OptionEntryFlags::None, N_("Render Compositor Diagnostic Transform"), N_("Apply a visible RGB transform after palette expansion to verify the experimental compositor path."), false)
     , renderLayerDiagnosticMode("Render Layer Diagnostics", OptionEntryFlags::None, N_("Render Layer Diagnostics"), N_("Visualize render layer ownership in the experimental frame compositor."), RenderLayerDiagnosticMode::Off,
           {
@@ -844,6 +849,7 @@ std::vector<OptionEntryBase *> ExperimentalOptions::GetEntries()
 {
 	return {
 		&renderFrameCompositor,
+		&renderFrameCompositorBackend,
 		&renderFrameCompositorDiagnosticTransform,
 		&renderLayerDiagnosticMode,
 		&renderPerformanceStats,
