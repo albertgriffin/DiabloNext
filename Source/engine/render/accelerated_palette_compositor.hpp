@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <string_view>
+#include <vector>
 
 #ifdef USE_SDL3
 #include <SDL3/SDL_surface.h>
@@ -41,6 +42,18 @@ struct CompositionLightingInputs {
 	CompositionLightingBufferView shadow;
 };
 
+class NeutralCompositionLightingInputs {
+public:
+	[[nodiscard]] const CompositionLightingInputs *Prepare(Size size);
+	[[nodiscard]] const CompositionLightingInputs *Get() const;
+
+private:
+	Size size_ {};
+	CompositionLightingInputs inputs_ {};
+	std::vector<uint8_t> lightPixels_;
+	std::vector<uint8_t> shadowPixels_;
+};
+
 struct AcceleratedPaletteFrame {
 	const CompositionFrame &composition;
 	const CompositionLightingInputs *lighting = nullptr;
@@ -58,6 +71,7 @@ public:
 };
 
 [[nodiscard]] bool AcceleratedPaletteFrameRequiresCpuPixels(const CompositionFrame &frame);
+[[nodiscard]] const CompositionLightingInputs *PrepareNeutralCompositionLightingInputs(Size size);
 [[nodiscard]] std::unique_ptr<IFrameCompositorBackend> CreateAcceleratedPaletteCompositorBackend(std::unique_ptr<IAcceleratedPalettePresenter> presenter, const CompositionLightingInputs *lightingInputs = nullptr);
 
 } // namespace devilution

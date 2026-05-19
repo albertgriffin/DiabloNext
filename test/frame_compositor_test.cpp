@@ -164,6 +164,49 @@ TEST(FrameCompositor, AcceleratedCompositorApiNamesAreStable)
 	EXPECT_EQ(AcceleratedCompositorApiName(AcceleratedCompositorApi::SdlGpu), "SDL_GPU");
 }
 
+TEST(FrameCompositor, NeutralCompositionLightingInputsPrepareNoOpBuffers)
+{
+	NeutralCompositionLightingInputs lightingInputs;
+	const CompositionLightingInputs *prepared = lightingInputs.Prepare({ 2, 2 });
+	ASSERT_NE(prepared, nullptr);
+
+	EXPECT_TRUE(prepared->light.IsValid());
+	EXPECT_EQ(prepared->light.size.width, 2);
+	EXPECT_EQ(prepared->light.size.height, 2);
+	EXPECT_EQ(prepared->light.pitch, 8);
+	EXPECT_EQ(prepared->light.format, CompositionLightingBufferFormat::Rgba8);
+	for (size_t i = 0; i < 16; i++) {
+		EXPECT_EQ(prepared->light.pixels[i], 255);
+	}
+
+	EXPECT_TRUE(prepared->shadow.IsValid());
+	EXPECT_EQ(prepared->shadow.size.width, 2);
+	EXPECT_EQ(prepared->shadow.size.height, 2);
+	EXPECT_EQ(prepared->shadow.pitch, 2);
+	EXPECT_EQ(prepared->shadow.format, CompositionLightingBufferFormat::Alpha8);
+	for (size_t i = 0; i < 4; i++) {
+		EXPECT_EQ(prepared->shadow.pixels[i], 0);
+	}
+
+	const uint8_t *lightPixels = prepared->light.pixels;
+	const uint8_t *shadowPixels = prepared->shadow.pixels;
+	EXPECT_EQ(lightingInputs.Prepare({ 2, 2 }), prepared);
+	EXPECT_EQ(prepared->light.pixels, lightPixels);
+	EXPECT_EQ(prepared->shadow.pixels, shadowPixels);
+
+	const CompositionLightingInputs *resized = lightingInputs.Prepare({ 3, 1 });
+	ASSERT_NE(resized, nullptr);
+	EXPECT_EQ(resized->light.size.width, 3);
+	EXPECT_EQ(resized->light.size.height, 1);
+	EXPECT_EQ(resized->light.pitch, 12);
+	EXPECT_EQ(resized->shadow.size.width, 3);
+	EXPECT_EQ(resized->shadow.size.height, 1);
+	EXPECT_EQ(resized->shadow.pitch, 3);
+
+	EXPECT_EQ(lightingInputs.Prepare({ 0, 1 }), nullptr);
+	EXPECT_EQ(lightingInputs.Get(), nullptr);
+}
+
 TEST(FrameCompositor, MakesIndexBufferViewFromEightBitSurface)
 {
 	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 3, 2, 8, SDL_PIXELFORMAT_INDEX8);
@@ -402,7 +445,19 @@ TEST(FrameCompositor, AcceleratedPaletteBackendPresentsIndexedFrame)
 	EXPECT_EQ(presenterPtr->outputSurfaceFrameCallCount, 0);
 	EXPECT_EQ(presenterPtr->observedIndexedFrame.indexBuffer.pixels, pixels);
 	EXPECT_EQ(presenterPtr->observedIndexedFrame.palette.version, 42);
-	EXPECT_EQ(presenterPtr->observedIndexedLighting, nullptr);
+	ASSERT_NE(presenterPtr->observedIndexedLighting, nullptr);
+	EXPECT_TRUE(presenterPtr->observedIndexedLighting->light.IsValid());
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.size.width, 1);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.size.height, 1);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.pitch, 4);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.format, CompositionLightingBufferFormat::Rgba8);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.pixels[0], 255);
+	EXPECT_TRUE(presenterPtr->observedIndexedLighting->shadow.IsValid());
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.size.width, 1);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.size.height, 1);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.pitch, 1);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.format, CompositionLightingBufferFormat::Alpha8);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.pixels[0], 0);
 	EXPECT_EQ(compositor.GetLastCompositionStats().selectedThreadCount, 1);
 
 	compositor.Present();

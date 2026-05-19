@@ -6,6 +6,7 @@
 #include "engine/render/accelerated_palette_compositor.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <memory>
 #include <string_view>
 #include <utility>
@@ -14,6 +15,12 @@
 
 namespace devilution {
 namespace {
+
+NeutralCompositionLightingInputs &GlobalNeutralLightingInputs()
+{
+	static NeutralCompositionLightingInputs inputs;
+	return inputs;
+}
 
 class AcceleratedPaletteCompositorBackend final : public IFrameCompositorBackend {
 public:
@@ -55,7 +62,8 @@ public:
 		}
 
 		stats.selectedThreadCount = std::max(stats.selectedThreadCount, 1);
-		if (!presenter_->PrepareIndexedFrame({ frame, lightingInputs_ })) {
+		const CompositionLightingInputs *lightingInputs = LightingInputsForIndexedFrame(frame.logicalSize);
+		if (!presenter_->PrepareIndexedFrame({ frame, lightingInputs })) {
 			const FrameCompositorBackendResult fallbackResult = cpuFallback_->Compose(frame, outputSurface, rects, stats);
 			if (fallbackResult == FrameCompositorBackendResult::None)
 				return FrameCompositorBackendResult::None;
@@ -78,6 +86,13 @@ private:
 		return presenter_ != nullptr && presenter_->IsAvailable();
 	}
 
+	[[nodiscard]] const CompositionLightingInputs *LightingInputsForIndexedFrame(const Size logicalSize)
+	{
+		if (lightingInputs_ != nullptr)
+			return lightingInputs_;
+		return PrepareNeutralCompositionLightingInputs(logicalSize);
+	}
+
 	std::unique_ptr<IAcceleratedPalettePresenter> presenter_;
 	std::unique_ptr<IFrameCompositorBackend> cpuFallback_;
 	const CompositionLightingInputs *lightingInputs_ = nullptr;
@@ -86,11 +101,56 @@ private:
 
 } // namespace
 
+const CompositionLightingInputs *NeutralCompositionLightingInputs::Prepare(const Size size)
+{
+	if (size.width <= 0 || size.height <= 0) {
+		size_ = {};
+		inputs_ = {};
+		lightPixels_.clear();
+		shadowPixels_.clear();
+		return nullptr;
+	}
+
+	if (size_ == size && inputs_.light.IsValid() && inputs_.shadow.IsValid())
+		return &inputs_;
+
+	size_ = size;
+	const auto width = static_cast<size_t>(size.width);
+	const auto height = static_cast<size_t>(size.height);
+	const size_t lightPitch = width * 4;
+	const size_t shadowPitch = width;
+	lightPixels_.assign(lightPitch * height, 255);
+	shadowPixels_.assign(shadowPitch * height, 0);
+	inputs_.light = {
+		lightPixels_.data(),
+		size,
+		static_cast<int>(lightPitch),
+		CompositionLightingBufferFormat::Rgba8,
+	};
+	inputs_.shadow = {
+		shadowPixels_.data(),
+		size,
+		static_cast<int>(shadowPitch),
+		CompositionLightingBufferFormat::Alpha8,
+	};
+	return &inputs_;
+}
+
+const CompositionLightingInputs *NeutralCompositionLightingInputs::Get() const
+{
+	return inputs_.light.IsValid() && inputs_.shadow.IsValid() ? &inputs_ : nullptr;
+}
+
 bool AcceleratedPaletteFrameRequiresCpuPixels(const CompositionFrame &frame)
 {
 	return frame.diagnosticTransform
 	    || frame.renderLayerDiagnosticMode != RenderLayerDiagnosticMode::Off
 	    || frame.renderLayerMap.pixels != nullptr;
+}
+
+const CompositionLightingInputs *PrepareNeutralCompositionLightingInputs(const Size size)
+{
+	return GlobalNeutralLightingInputs().Prepare(size);
 }
 
 std::unique_ptr<IFrameCompositorBackend> CreateAcceleratedPaletteCompositorBackend(std::unique_ptr<IAcceleratedPalettePresenter> presenter, const CompositionLightingInputs *lightingInputs)
