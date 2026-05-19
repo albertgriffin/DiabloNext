@@ -46,7 +46,7 @@
 #include "controls/touch/gamepad.h"
 #include "engine/backbuffer_state.hpp"
 #include "engine/dx.h"
-#include "engine/render/opengl_palette_compositor.hpp"
+#include "engine/render/accelerated_compositor_lifecycle.hpp"
 #include "headless_mode.hpp"
 #include "interfac.h"
 #include "options.h"
@@ -610,9 +610,9 @@ bool SpawnWindow(const char *lpWindowName)
 #else
 	int flags = SDL_WINDOW_ALLOW_HIGHDPI;
 #endif
-	const bool openGlPaletteCompositorWindow = OpenGlPaletteCompositorWindowRequested();
-	if (openGlPaletteCompositorWindow) {
-		ConfigureOpenGlPaletteCompositorWindow();
+	const bool acceleratedFrameCompositorWindow = AcceleratedFrameCompositorWindowRequested();
+	if (acceleratedFrameCompositorWindow) {
+		ConfigureAcceleratedFrameCompositorWindow();
 #ifdef USE_SDL3
 		flags |= SDL_WINDOW_OPENGL;
 #else
@@ -633,7 +633,7 @@ bool SpawnWindow(const char *lpWindowName)
 	}
 
 #ifdef USE_SDL3
-	if (*GetOptions().Graphics.upscale && !openGlPaletteCompositorWindow) {
+	if (*GetOptions().Graphics.upscale && !acceleratedFrameCompositorWindow) {
 		if (!SDL_CreateWindowAndRenderer(lpWindowName, windowSize.width, windowSize.height, flags, &ghMainWnd, &renderer)) ErrSdl();
 	} else {
 		ghMainWnd = SDL_CreateWindow(lpWindowName, windowSize.width, windowSize.height, flags);
@@ -761,13 +761,13 @@ void ReinitializeRenderer()
 	AdjustToScreenGeometry(Size(surface->w, surface->h));
 #else
 
-	if (OpenGlPaletteCompositorRequested()) {
+	if (AcceleratedFrameCompositorRequested()) {
 		if (renderer != nullptr) {
 			texture.reset();
 			SDL_DestroyRenderer(renderer);
 			renderer = nullptr;
 		}
-		if (ReinitializeOpenGlPaletteCompositor(ghMainWnd)) {
+		if (ReinitializeAcceleratedFrameCompositor(ghMainWnd)) {
 #ifdef USE_SDL3
 			RendererTextureSurface = SDLSurfaceUniquePtr { SDL_CreateSurface(gnScreenWidth, gnScreenHeight, DEVILUTIONX_DISPLAY_TEXTURE_FORMAT) };
 			if (RendererTextureSurface == nullptr) ErrSdl();
@@ -776,7 +776,7 @@ void ReinitializeRenderer()
 #endif
 			return;
 		}
-		ShutdownOpenGlPaletteCompositor();
+		ShutdownAcceleratedFrameCompositor();
 	}
 
 	if (*GetOptions().Graphics.upscale) {
@@ -944,7 +944,7 @@ SDL_Surface *GetOutputSurface()
 #else
 	if (renderer != nullptr)
 		return RendererTextureSurface.get();
-	if (OpenGlPaletteCompositorIsActive() && RendererTextureSurface != nullptr)
+	if (AcceleratedFrameCompositorIsActive() && RendererTextureSurface != nullptr)
 		return RendererTextureSurface.get();
 	SDL_Surface *ret = SDL_GetWindowSurface(ghMainWnd);
 	if (ret == nullptr)

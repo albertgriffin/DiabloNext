@@ -17,9 +17,10 @@ namespace {
 
 class AcceleratedPaletteCompositorBackend final : public IFrameCompositorBackend {
 public:
-	explicit AcceleratedPaletteCompositorBackend(std::unique_ptr<IAcceleratedPalettePresenter> presenter)
+	explicit AcceleratedPaletteCompositorBackend(std::unique_ptr<IAcceleratedPalettePresenter> presenter, const CompositionLightingInputs *lightingInputs)
 	    : presenter_(std::move(presenter))
 	    , cpuFallback_(CreateCpuFrameCompositorBackend())
+	    , lightingInputs_(lightingInputs)
 	{
 	}
 
@@ -48,17 +49,17 @@ public:
 				Log("{} using CPU pixel fallback for diagnostics", Name());
 				loggedCpuFallback_ = true;
 			}
-			if (!presenter_->PrepareOutputSurfaceFrame({ frame }, outputSurface))
+			if (!presenter_->PrepareOutputSurfaceFrame({ frame, lightingInputs_ }, outputSurface))
 				return fallbackResult;
 			return FrameCompositorBackendResult::Presented;
 		}
 
 		stats.selectedThreadCount = std::max(stats.selectedThreadCount, 1);
-		if (!presenter_->PrepareIndexedFrame({ frame })) {
+		if (!presenter_->PrepareIndexedFrame({ frame, lightingInputs_ })) {
 			const FrameCompositorBackendResult fallbackResult = cpuFallback_->Compose(frame, outputSurface, rects, stats);
 			if (fallbackResult == FrameCompositorBackendResult::None)
 				return FrameCompositorBackendResult::None;
-			if (PresenterAvailable() && presenter_->PrepareOutputSurfaceFrame({ frame }, outputSurface))
+			if (PresenterAvailable() && presenter_->PrepareOutputSurfaceFrame({ frame, lightingInputs_ }, outputSurface))
 				return FrameCompositorBackendResult::Presented;
 			return fallbackResult;
 		}
@@ -79,6 +80,7 @@ private:
 
 	std::unique_ptr<IAcceleratedPalettePresenter> presenter_;
 	std::unique_ptr<IFrameCompositorBackend> cpuFallback_;
+	const CompositionLightingInputs *lightingInputs_ = nullptr;
 	bool loggedCpuFallback_ = false;
 };
 
@@ -91,11 +93,11 @@ bool AcceleratedPaletteFrameRequiresCpuPixels(const CompositionFrame &frame)
 	    || frame.renderLayerMap.pixels != nullptr;
 }
 
-std::unique_ptr<IFrameCompositorBackend> CreateAcceleratedPaletteCompositorBackend(std::unique_ptr<IAcceleratedPalettePresenter> presenter)
+std::unique_ptr<IFrameCompositorBackend> CreateAcceleratedPaletteCompositorBackend(std::unique_ptr<IAcceleratedPalettePresenter> presenter, const CompositionLightingInputs *lightingInputs)
 {
 	if (presenter == nullptr || !presenter->IsAvailable())
 		return nullptr;
-	return std::make_unique<AcceleratedPaletteCompositorBackend>(std::move(presenter));
+	return std::make_unique<AcceleratedPaletteCompositorBackend>(std::move(presenter), lightingInputs);
 }
 
 } // namespace devilution

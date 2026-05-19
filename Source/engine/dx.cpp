@@ -20,8 +20,8 @@
 #include "controls/control_mode.hpp"
 #include "controls/plrctrls.h"
 #include "engine/palette.h"
+#include "engine/render/accelerated_compositor_lifecycle.hpp"
 #include "engine/render/frame_compositor.hpp"
-#include "engine/render/opengl_palette_compositor.hpp"
 #include "engine/render/primitive_render.hpp"
 #include "engine/render/render_perf.hpp"
 #include "headless_mode.hpp"
@@ -129,7 +129,7 @@ void dx_cleanup()
 #endif
 
 	ShutdownFrameComposition();
-	ShutdownOpenGlPaletteCompositor();
+	ShutdownAcceleratedFrameCompositor();
 	PalSurface = nullptr;
 	PinnedPalSurface = nullptr;
 	Palette = nullptr;

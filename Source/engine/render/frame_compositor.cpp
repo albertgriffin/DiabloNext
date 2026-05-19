@@ -41,7 +41,7 @@
 #include "appfat.h"
 #include "engine/dx.h"
 #include "engine/palette.h"
-#include "engine/render/opengl_palette_compositor.hpp"
+#include "engine/render/accelerated_compositor_lifecycle.hpp"
 #include "engine/render/render_layer.hpp"
 #include "options.h"
 #include "utils/display.h"
@@ -676,11 +676,9 @@ bool CurrentFrameCompositorBackendInitialized = false;
 
 [[nodiscard]] std::unique_ptr<IFrameCompositorBackend> CreateFrameCompositorBackend(RenderFrameCompositorBackend backend)
 {
-	if (backend == RenderFrameCompositorBackend::OpenGlPalette) {
-		std::unique_ptr<IFrameCompositorBackend> openGlBackend = CreateOpenGlPaletteCompositorBackend();
-		if (openGlBackend != nullptr && openGlBackend->IsAvailable())
-			return openGlBackend;
-	}
+	std::unique_ptr<IFrameCompositorBackend> acceleratedBackend = CreateAcceleratedFrameCompositorBackend(backend);
+	if (acceleratedBackend != nullptr && acceleratedBackend->IsAvailable())
+		return acceleratedBackend;
 	return CreateCpuFrameCompositorBackend();
 }
 
@@ -984,7 +982,7 @@ bool ComposeFrameToOutput(SDL_Surface *outputSurface)
 	}
 	const FrameCompositorBackendResult backendResult = FrameCompositor.GetLastBackendResult();
 	return backendResult == FrameCompositorBackendResult::Presented
-	    || (backendResult == FrameCompositorBackendResult::None && OpenGlPaletteCompositorIsActive());
+	    || (backendResult == FrameCompositorBackendResult::None && AcceleratedFrameCompositorIsActive());
 }
 
 void PresentFrameComposition()

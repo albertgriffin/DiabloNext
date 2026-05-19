@@ -378,6 +378,46 @@ TEST(FrameCompositor, AcceleratedPaletteBackendUsesCpuPixelsForDiagnostics)
 	EXPECT_NE(color.b, palette[1].b);
 }
 
+TEST(FrameCompositor, AcceleratedPaletteBackendForwardsLightingInputs)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	std::array<uint8_t, 4> lightPixels { 255, 255, 255, 255 };
+	CompositionLightingInputs lightingInputs {};
+	lightingInputs.light = {
+		lightPixels.data(),
+		{ 1, 1 },
+		4,
+		CompositionLightingBufferFormat::Rgba8,
+	};
+	EXPECT_TRUE(lightingInputs.light.IsValid());
+
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto presenter = std::make_unique<RecordingAcceleratedPalettePresenter>();
+	RecordingAcceleratedPalettePresenter *presenterPtr = presenter.get();
+	std::unique_ptr<IFrameCompositorBackend> backend = CreateAcceleratedPaletteCompositorBackend(std::move(presenter), &lightingInputs);
+	ASSERT_NE(backend, nullptr);
+
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.BeginFrame({ 1, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 42));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.SetFullFrameDirty();
+	compositor.Compose();
+
+	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::Presented);
+	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 1);
+	EXPECT_EQ(presenterPtr->observedIndexedFrame.indexBuffer.pixels, pixels);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting, &lightingInputs);
+}
+
 TEST(FrameCompositor, AcceleratedPaletteBackendUploadsCpuPixelsWhenIndexedUploadFails)
 {
 	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);

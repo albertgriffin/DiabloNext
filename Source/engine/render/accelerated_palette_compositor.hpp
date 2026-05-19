@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string_view>
 
@@ -18,9 +19,26 @@
 
 namespace devilution {
 
-// Future dynamic light and shadow resources should attach here. This is
-// intentionally empty until those buffers exist.
+enum class CompositionLightingBufferFormat : uint8_t {
+	Rgba8,
+	Alpha8,
+};
+
+struct CompositionLightingBufferView {
+	const uint8_t *pixels = nullptr;
+	Size size;
+	int pitch = 0;
+	CompositionLightingBufferFormat format = CompositionLightingBufferFormat::Rgba8;
+
+	[[nodiscard]] bool IsValid() const
+	{
+		return pixels != nullptr && size.width > 0 && size.height > 0 && pitch > 0;
+	}
+};
+
 struct CompositionLightingInputs {
+	CompositionLightingBufferView light;
+	CompositionLightingBufferView shadow;
 };
 
 struct AcceleratedPaletteFrame {
@@ -40,6 +58,6 @@ public:
 };
 
 [[nodiscard]] bool AcceleratedPaletteFrameRequiresCpuPixels(const CompositionFrame &frame);
-[[nodiscard]] std::unique_ptr<IFrameCompositorBackend> CreateAcceleratedPaletteCompositorBackend(std::unique_ptr<IAcceleratedPalettePresenter> presenter);
+[[nodiscard]] std::unique_ptr<IFrameCompositorBackend> CreateAcceleratedPaletteCompositorBackend(std::unique_ptr<IAcceleratedPalettePresenter> presenter, const CompositionLightingInputs *lightingInputs = nullptr);
 
 } // namespace devilution

@@ -89,6 +89,7 @@ set(libdevilutionx_SRCS
   engine/trn.cpp
 
   engine/render/automap_render.cpp
+  engine/render/accelerated_compositor_lifecycle.cpp
   engine/render/accelerated_palette_compositor.cpp
   engine/render/frame_compositor.cpp
   engine/render/opengl_palette_compositor.cpp
