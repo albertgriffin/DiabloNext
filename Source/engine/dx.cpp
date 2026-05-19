@@ -85,6 +85,15 @@ bool CanRenderDirectlyToOutputSurface()
 #endif
 }
 
+bool ShouldLimitFrameRateAfterPresent()
+{
+#ifndef USE_SDL1
+	return *GetOptions().Graphics.frameRateControl != FrameRateControl::VerticalSync;
+#else
+	return true;
+#endif
+}
+
 /**
  * @brief Limit FPS to avoid high CPU load, use when v-sync isn't available
  */
@@ -265,7 +274,7 @@ void RenderPresent()
 			RenderPerfScope renderPerfScope(RenderPerfPhase::Present);
 			PresentFrameComposition();
 		}
-		if (*GetOptions().Graphics.frameRateControl != FrameRateControl::VerticalSync) {
+		if (ShouldLimitFrameRateAfterPresent()) {
 			LimitFrameRate();
 		}
 		return;
@@ -294,7 +303,7 @@ void RenderPresent()
 		}
 		PresentFrameComposition();
 
-		if (*GetOptions().Graphics.frameRateControl != FrameRateControl::VerticalSync) {
+		if (ShouldLimitFrameRateAfterPresent()) {
 			LimitFrameRate();
 		}
 	} else {
