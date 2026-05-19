@@ -13,6 +13,7 @@
 #include <SDL.h>
 #endif
 
+#include "engine/render/accelerated_compositor_lifecycle.hpp"
 #include "engine/render/accelerated_palette_compositor.hpp"
 #include "engine/render/frame_compositor.hpp"
 #include "engine/render/render_layer.hpp"
@@ -149,6 +150,13 @@ void ExpectWorldTint(const SDL_Surface &surface, const int x, const int y, const
 	EXPECT_EQ(color.r, baseColor.r / 2);
 	EXPECT_EQ(color.g, (static_cast<uint16_t>(baseColor.g) + 255) / 2);
 	EXPECT_EQ(color.b, baseColor.b / 2);
+}
+
+TEST(FrameCompositor, AcceleratedCompositorApiNamesAreStable)
+{
+	EXPECT_EQ(AcceleratedCompositorApiName(AcceleratedCompositorApi::None), "none");
+	EXPECT_EQ(AcceleratedCompositorApiName(AcceleratedCompositorApi::OpenGl), "OpenGL");
+	EXPECT_EQ(AcceleratedCompositorApiName(AcceleratedCompositorApi::SdlGpu), "SDL_GPU");
 }
 
 TEST(FrameCompositor, MakesIndexBufferViewFromEightBitSurface)

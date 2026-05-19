@@ -5,83 +5,167 @@
  */
 #include "engine/render/accelerated_compositor_lifecycle.hpp"
 
+#include <array>
 #include <memory>
+#include <string_view>
 
 #include "engine/render/frame_compositor.hpp"
 #include "engine/render/opengl_palette_compositor.hpp"
 #include "options.h"
 
 namespace devilution {
+namespace {
+
+struct AcceleratedCompositorBackendDescriptor {
+	RenderFrameCompositorBackend backend;
+	AcceleratedCompositorApi api;
+	bool (*requested)();
+	bool (*windowRequested)();
+	void (*configureWindow)();
+	bool (*reinitialize)(SDL_Window *window);
+	bool (*active)();
+	void (*shutdown)();
+	std::unique_ptr<IFrameCompositorBackend> (*createBackend)();
+};
+
+std::unique_ptr<IFrameCompositorBackend> CreateNoAcceleratedBackend()
+{
+	return nullptr;
+}
+
+bool FalsePredicate()
+{
+	return false;
+}
+
+void NoopConfigureWindow()
+{
+}
+
+bool NoopReinitialize(SDL_Window *window)
+{
+	(void)window;
+	return false;
+}
+
+void NoopShutdown()
+{
+}
+
+constexpr std::array<AcceleratedCompositorBackendDescriptor, 2> AcceleratedCompositorBackends {
+	{
+	    {
+	        RenderFrameCompositorBackend::CpuPalette,
+	        AcceleratedCompositorApi::None,
+	        FalsePredicate,
+	        FalsePredicate,
+	        NoopConfigureWindow,
+	        NoopReinitialize,
+	        FalsePredicate,
+	        NoopShutdown,
+	        CreateNoAcceleratedBackend,
+	    },
+	    {
+	        RenderFrameCompositorBackend::OpenGlPalette,
+	        AcceleratedCompositorApi::OpenGl,
+	        OpenGlPaletteCompositorRequested,
+	        OpenGlPaletteCompositorWindowRequested,
+	        ConfigureOpenGlPaletteCompositorWindow,
+	        ReinitializeOpenGlPaletteCompositor,
+	        OpenGlPaletteCompositorIsActive,
+	        ShutdownOpenGlPaletteCompositor,
+	        CreateOpenGlPaletteCompositorBackend,
+	    },
+	},
+};
+
+const AcceleratedCompositorBackendDescriptor *FindAcceleratedCompositorBackend(const RenderFrameCompositorBackend backend)
+{
+	for (const AcceleratedCompositorBackendDescriptor &descriptor : AcceleratedCompositorBackends) {
+		if (descriptor.backend == backend)
+			return &descriptor;
+	}
+	return nullptr;
+}
+
+const AcceleratedCompositorBackendDescriptor *RequestedAcceleratedCompositorBackend()
+{
+	return FindAcceleratedCompositorBackend(*GetOptions().Experimental.renderFrameCompositorBackend);
+}
+
+} // namespace
+
+std::string_view AcceleratedCompositorApiName(const AcceleratedCompositorApi api)
+{
+	switch (api) {
+	case AcceleratedCompositorApi::None:
+		return "none";
+	case AcceleratedCompositorApi::OpenGl:
+		return "OpenGL";
+	case AcceleratedCompositorApi::SdlGpu:
+		return "SDL_GPU";
+	}
+	return "unknown";
+}
+
+AcceleratedCompositorApi AcceleratedFrameCompositorRequestedApi()
+{
+	const AcceleratedCompositorBackendDescriptor *descriptor = RequestedAcceleratedCompositorBackend();
+	if (descriptor == nullptr || !descriptor->requested())
+		return AcceleratedCompositorApi::None;
+	return descriptor->api;
+}
+
+AcceleratedCompositorApi AcceleratedFrameCompositorActiveApi()
+{
+	const AcceleratedCompositorBackendDescriptor *descriptor = RequestedAcceleratedCompositorBackend();
+	if (descriptor == nullptr || !descriptor->active())
+		return AcceleratedCompositorApi::None;
+	return descriptor->api;
+}
 
 bool AcceleratedFrameCompositorRequested()
 {
-	switch (*GetOptions().Experimental.renderFrameCompositorBackend) {
-	case RenderFrameCompositorBackend::OpenGlPalette:
-		return OpenGlPaletteCompositorRequested();
-	case RenderFrameCompositorBackend::CpuPalette:
-		break;
-	}
-	return false;
+	return AcceleratedFrameCompositorRequestedApi() != AcceleratedCompositorApi::None;
 }
 
 bool AcceleratedFrameCompositorWindowRequested()
 {
-	switch (*GetOptions().Experimental.renderFrameCompositorBackend) {
-	case RenderFrameCompositorBackend::OpenGlPalette:
-		return OpenGlPaletteCompositorWindowRequested();
-	case RenderFrameCompositorBackend::CpuPalette:
-		break;
-	}
-	return false;
+	const AcceleratedCompositorBackendDescriptor *descriptor = RequestedAcceleratedCompositorBackend();
+	return descriptor != nullptr && descriptor->windowRequested();
 }
 
 void ConfigureAcceleratedFrameCompositorWindow()
 {
-	switch (*GetOptions().Experimental.renderFrameCompositorBackend) {
-	case RenderFrameCompositorBackend::OpenGlPalette:
-		ConfigureOpenGlPaletteCompositorWindow();
-		return;
-	case RenderFrameCompositorBackend::CpuPalette:
-		break;
-	}
+	const AcceleratedCompositorBackendDescriptor *descriptor = RequestedAcceleratedCompositorBackend();
+	if (descriptor != nullptr)
+		descriptor->configureWindow();
 }
 
 bool ReinitializeAcceleratedFrameCompositor(SDL_Window *window)
 {
-	switch (*GetOptions().Experimental.renderFrameCompositorBackend) {
-	case RenderFrameCompositorBackend::OpenGlPalette:
-		return ReinitializeOpenGlPaletteCompositor(window);
-	case RenderFrameCompositorBackend::CpuPalette:
-		break;
-	}
-	return false;
+	const AcceleratedCompositorBackendDescriptor *descriptor = RequestedAcceleratedCompositorBackend();
+	return descriptor != nullptr && descriptor->reinitialize(window);
 }
 
 bool AcceleratedFrameCompositorIsActive()
 {
-	switch (*GetOptions().Experimental.renderFrameCompositorBackend) {
-	case RenderFrameCompositorBackend::OpenGlPalette:
-		return OpenGlPaletteCompositorIsActive();
-	case RenderFrameCompositorBackend::CpuPalette:
-		break;
-	}
-	return false;
+	return AcceleratedFrameCompositorActiveApi() != AcceleratedCompositorApi::None;
 }
 
 void ShutdownAcceleratedFrameCompositor()
 {
-	ShutdownOpenGlPaletteCompositor();
+	for (const AcceleratedCompositorBackendDescriptor &descriptor : AcceleratedCompositorBackends) {
+		descriptor.shutdown();
+	}
 }
 
 std::unique_ptr<IFrameCompositorBackend> CreateAcceleratedFrameCompositorBackend(const RenderFrameCompositorBackend backend)
 {
-	switch (backend) {
-	case RenderFrameCompositorBackend::OpenGlPalette:
-		return CreateOpenGlPaletteCompositorBackend();
-	case RenderFrameCompositorBackend::CpuPalette:
-		break;
-	}
-	return nullptr;
+	const AcceleratedCompositorBackendDescriptor *descriptor = FindAcceleratedCompositorBackend(backend);
+	if (descriptor == nullptr)
+		return nullptr;
+	return descriptor->createBackend();
 }
 
 } // namespace devilution

@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string_view>
 
 #ifdef USE_SDL3
 #include <SDL3/SDL_video.h>
@@ -19,6 +20,16 @@ namespace devilution {
 class IFrameCompositorBackend;
 enum class RenderFrameCompositorBackend : uint8_t;
 
+enum class AcceleratedCompositorApi : uint8_t {
+	None,
+	OpenGl,
+	// Production acceleration target. It is not selectable until a backend is added.
+	SdlGpu,
+};
+
+[[nodiscard]] std::string_view AcceleratedCompositorApiName(AcceleratedCompositorApi api);
+[[nodiscard]] AcceleratedCompositorApi AcceleratedFrameCompositorRequestedApi();
+[[nodiscard]] AcceleratedCompositorApi AcceleratedFrameCompositorActiveApi();
 [[nodiscard]] bool AcceleratedFrameCompositorRequested();
 [[nodiscard]] bool AcceleratedFrameCompositorWindowRequested();
 void ConfigureAcceleratedFrameCompositorWindow();
