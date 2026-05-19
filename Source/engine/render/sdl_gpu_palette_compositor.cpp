@@ -61,6 +61,7 @@ constexpr std::string_view SdlGpuBackendName = "sdl-gpu-palette";
 constexpr int PaletteTextureWidth = 256;
 constexpr int PaletteTextureHeight = 1;
 constexpr uint32_t PaletteUploadBytes = PaletteTextureWidth * PaletteTextureHeight * 4;
+constexpr SDL_GPUTextureFormat PaletteExpandedTextureFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 
 constexpr char PaletteVertexShaderMsl[] = R"(
 #include <metal_stdlib>
@@ -119,11 +120,7 @@ fragment float4 main0(VertexOut in [[stage_in]],
 }
 )";
 
-constexpr SDL_GPUShaderFormat SupportedShaderFormats = SDL_GPU_SHADERFORMAT_SPIRV
-    | SDL_GPU_SHADERFORMAT_DXBC
-    | SDL_GPU_SHADERFORMAT_DXIL
-    | SDL_GPU_SHADERFORMAT_MSL
-    | SDL_GPU_SHADERFORMAT_METALLIB;
+constexpr SDL_GPUShaderFormat SupportedShaderFormats = SDL_GPU_SHADERFORMAT_MSL;
 
 [[nodiscard]] int SurfaceBytesPerPixel(const SDL_Surface &surface)
 {
@@ -165,6 +162,7 @@ public:
 	void Destroy()
 	{
 		ReleasePalettePipelineResources();
+		ReleasePaletteExpandedTexture();
 		ReleaseTexture();
 		ReleaseIndexedTextures();
 		ReleaseTransferBuffer();
@@ -192,7 +190,8 @@ public:
 		uploadedPaletteVersion_ = 0;
 		pendingMode_ = PendingMode::None;
 		palettePipelineFormat_ = SDL_GPU_TEXTUREFORMAT_INVALID;
-		indexSamplerFilter_ = SDL_GPU_FILTER_NEAREST;
+		paletteExpandedTextureWidth_ = 0;
+		paletteExpandedTextureHeight_ = 0;
 		pendingLogicalSize_ = {};
 		pendingOutputSize_ = {};
 		outputRgba_.clear();
@@ -205,7 +204,9 @@ public:
 
 	[[nodiscard]] bool PrepareIndexedFrame(const CompositionFrame &frame)
 	{
-		if (!EnsurePaletteRenderResources() || !UploadIndexedInputs(frame)) {
+		if (!EnsurePaletteRenderResources()
+		    || !EnsurePaletteExpandedTexture(frame.logicalSize.width, frame.logicalSize.height)
+		    || !UploadIndexedInputs(frame)) {
 			if (!loggedIndexedDeferral_) {
 				Log("SDL_GPU palette compositor could not prepare indexed palette presentation; using CPU pixel upload fallback");
 				loggedIndexedDeferral_ = true;
@@ -368,6 +369,8 @@ private:
 		UpdateSwapchainParameters();
 		if (!EnsurePaletteRenderResources())
 			return;
+		if (!EnsurePaletteExpandedTexture(pendingLogicalSize_.width, pendingLogicalSize_.height))
+			return;
 
 		SDL_GPUCommandBuffer *commandBuffer = SDL_AcquireGPUCommandBuffer(device_);
 		if (commandBuffer == nullptr) {
@@ -388,9 +391,8 @@ private:
 			return;
 		}
 
-		const Rectangle viewport = CalculateViewport({ static_cast<int>(swapchainWidth), static_cast<int>(swapchainHeight) }, pendingLogicalSize_);
 		const SDL_GPUColorTargetInfo colorTarget {
-			swapchainTexture,
+			paletteExpandedTexture_,
 			0,
 			0,
 			{ 0.F, 0.F, 0.F, 1.F },
@@ -406,16 +408,16 @@ private:
 		};
 		SDL_GPURenderPass *renderPass = SDL_BeginGPURenderPass(commandBuffer, &colorTarget, 1, nullptr);
 		if (renderPass == nullptr) {
-			Log("SDL_GPU palette compositor could not begin indexed presentation render pass: {}", SDL_GetError());
+			Log("SDL_GPU palette compositor could not begin palette expansion render pass: {}", SDL_GetError());
 			(void)SDL_CancelGPUCommandBuffer(commandBuffer);
 			return;
 		}
 
 		const SDL_GPUViewport gpuViewport {
-			static_cast<float>(std::max(0, viewport.position.x)),
-			static_cast<float>(std::max(0, viewport.position.y)),
-			static_cast<float>(std::max(0, viewport.size.width)),
-			static_cast<float>(std::max(0, viewport.size.height)),
+			0.F,
+			0.F,
+			static_cast<float>(pendingLogicalSize_.width),
+			static_cast<float>(pendingLogicalSize_.height),
 			0.F,
 			1.F,
 		};
@@ -428,6 +430,37 @@ private:
 		SDL_BindGPUFragmentSamplers(renderPass, 0, samplers, 2);
 		SDL_DrawGPUPrimitives(renderPass, 6, 1, 0, 0);
 		SDL_EndGPURenderPass(renderPass);
+
+		const Rectangle viewport = CalculateViewport({ static_cast<int>(swapchainWidth), static_cast<int>(swapchainHeight) }, pendingLogicalSize_);
+		const SDL_GPUBlitInfo blit {
+			{
+			    paletteExpandedTexture_,
+			    0,
+			    0,
+			    0,
+			    0,
+			    static_cast<uint32_t>(pendingLogicalSize_.width),
+			    static_cast<uint32_t>(pendingLogicalSize_.height),
+			},
+			{
+			    swapchainTexture,
+			    0,
+			    0,
+			    static_cast<uint32_t>(std::max(0, viewport.position.x)),
+			    static_cast<uint32_t>(std::max(0, viewport.position.y)),
+			    static_cast<uint32_t>(std::max(0, viewport.size.width)),
+			    static_cast<uint32_t>(std::max(0, viewport.size.height)),
+			},
+			SDL_GPU_LOADOP_CLEAR,
+			{ 0.F, 0.F, 0.F, 1.F },
+			SDL_FLIP_NONE,
+			*GetOptions().Graphics.scaleQuality == ScalingQuality::NearestPixel ? SDL_GPU_FILTER_NEAREST : SDL_GPU_FILTER_LINEAR,
+			false,
+			0,
+			0,
+			0,
+		};
+		SDL_BlitGPUTexture(commandBuffer, &blit);
 
 		if (!SDL_SubmitGPUCommandBuffer(commandBuffer)) {
 			Log("SDL_GPU palette compositor could not submit indexed presentation command buffer: {}", SDL_GetError());
@@ -456,6 +489,15 @@ private:
 			SDL_ReleaseGPUTexture(device_, paletteTexture_);
 		indexTexture_ = nullptr;
 		paletteTexture_ = nullptr;
+	}
+
+	void ReleasePaletteExpandedTexture()
+	{
+		if (paletteExpandedTexture_ != nullptr && device_ != nullptr)
+			SDL_ReleaseGPUTexture(device_, paletteExpandedTexture_);
+		paletteExpandedTexture_ = nullptr;
+		paletteExpandedTextureWidth_ = 0;
+		paletteExpandedTextureHeight_ = 0;
 	}
 
 	void ReleaseIndexedTransferBuffers()
@@ -510,12 +552,12 @@ private:
 
 		const SDL_GPUShaderFormat supportedFormats = SDL_GetGPUShaderFormats(device_);
 		if ((supportedFormats & SDL_GPU_SHADERFORMAT_MSL) == 0) {
+			Log("SDL_GPU palette compositor requires MSL shaders in this spike; falling back to CPU palette composition");
 			palettePipelineFailed_ = true;
 			return false;
 		}
 
-		const SDL_GPUTextureFormat swapchainFormat = SDL_GetGPUSwapchainTextureFormat(device_, window_);
-		if (palettePipeline_ != nullptr && palettePipelineFormat_ == swapchainFormat)
+		if (palettePipeline_ != nullptr && palettePipelineFormat_ == PaletteExpandedTextureFormat)
 			return true;
 
 		if (palettePipeline_ != nullptr && device_ != nullptr)
@@ -536,7 +578,7 @@ private:
 		}
 
 		const SDL_GPUColorTargetDescription colorTarget {
-			swapchainFormat,
+			PaletteExpandedTextureFormat,
 			{},
 		};
 		SDL_GPUGraphicsPipelineCreateInfo createInfo {};
@@ -559,21 +601,16 @@ private:
 			return false;
 		}
 
-		palettePipelineFormat_ = swapchainFormat;
+		palettePipelineFormat_ = PaletteExpandedTextureFormat;
 		return true;
 	}
 
 	[[nodiscard]] bool EnsureIndexedSamplers()
 	{
-		const SDL_GPUFilter indexFilter = *GetOptions().Graphics.scaleQuality == ScalingQuality::NearestPixel ? SDL_GPU_FILTER_NEAREST : SDL_GPU_FILTER_LINEAR;
-		if (indexSampler_ != nullptr && indexSamplerFilter_ != indexFilter) {
-			SDL_ReleaseGPUSampler(device_, indexSampler_);
-			indexSampler_ = nullptr;
-		}
 		if (indexSampler_ == nullptr) {
 			const SDL_GPUSamplerCreateInfo createInfo {
-				indexFilter,
-				indexFilter,
+				SDL_GPU_FILTER_NEAREST,
+				SDL_GPU_FILTER_NEAREST,
 				SDL_GPU_SAMPLERMIPMAPMODE_NEAREST,
 				SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
 				SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
@@ -594,7 +631,6 @@ private:
 				Log("SDL_GPU palette compositor could not create index sampler: {}", SDL_GetError());
 				return false;
 			}
-			indexSamplerFilter_ = indexFilter;
 		}
 		if (paletteSampler_ == nullptr) {
 			const SDL_GPUSamplerCreateInfo createInfo {
@@ -627,6 +663,44 @@ private:
 	[[nodiscard]] bool EnsurePaletteRenderResources()
 	{
 		return EnsurePalettePipeline() && EnsureIndexedSamplers();
+	}
+
+	[[nodiscard]] bool EnsurePaletteExpandedTexture(const int width, const int height)
+	{
+		if (width <= 0 || height <= 0)
+			return false;
+		if (paletteExpandedTexture_ != nullptr && paletteExpandedTextureWidth_ == width && paletteExpandedTextureHeight_ == height)
+			return true;
+
+		if (!SDL_GPUTextureSupportsFormat(
+		        device_,
+		        PaletteExpandedTextureFormat,
+		        SDL_GPU_TEXTURETYPE_2D,
+		        SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET)) {
+			Log("SDL_GPU palette compositor cannot create RGBA color target for palette expansion; falling back to CPU palette composition");
+			return false;
+		}
+
+		ReleasePaletteExpandedTexture();
+		const SDL_GPUTextureCreateInfo createInfo {
+			SDL_GPU_TEXTURETYPE_2D,
+			PaletteExpandedTextureFormat,
+			SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
+			static_cast<uint32_t>(width),
+			static_cast<uint32_t>(height),
+			1,
+			1,
+			SDL_GPU_SAMPLECOUNT_1,
+			0,
+		};
+		paletteExpandedTexture_ = SDL_CreateGPUTexture(device_, &createInfo);
+		if (paletteExpandedTexture_ == nullptr) {
+			Log("SDL_GPU palette compositor could not create palette-expanded texture: {}", SDL_GetError());
+			return false;
+		}
+		paletteExpandedTextureWidth_ = width;
+		paletteExpandedTextureHeight_ = height;
+		return true;
 	}
 
 	[[nodiscard]] bool EnsureIndexTexture(const int width, const int height)
@@ -977,6 +1051,7 @@ private:
 	SDL_GPUTexture *outputTexture_ = nullptr;
 	SDL_GPUTexture *indexTexture_ = nullptr;
 	SDL_GPUTexture *paletteTexture_ = nullptr;
+	SDL_GPUTexture *paletteExpandedTexture_ = nullptr;
 	SDL_GPUGraphicsPipeline *palettePipeline_ = nullptr;
 	SDL_GPUSampler *indexSampler_ = nullptr;
 	SDL_GPUSampler *paletteSampler_ = nullptr;
@@ -994,12 +1069,13 @@ private:
 	int outputTextureHeight_ = 0;
 	int indexTextureWidth_ = 0;
 	int indexTextureHeight_ = 0;
+	int paletteExpandedTextureWidth_ = 0;
+	int paletteExpandedTextureHeight_ = 0;
 	uint32_t transferBufferSize_ = 0;
 	uint32_t indexTransferBufferSize_ = 0;
 	uint64_t uploadedPaletteVersion_ = 0;
 	SDL_GPUPresentMode lastPresentMode_ = SDL_GPU_PRESENTMODE_VSYNC;
 	SDL_GPUTextureFormat palettePipelineFormat_ = SDL_GPU_TEXTUREFORMAT_INVALID;
-	SDL_GPUFilter indexSamplerFilter_ = SDL_GPU_FILTER_NEAREST;
 	PendingMode pendingMode_ = PendingMode::None;
 	Size pendingLogicalSize_ {};
 	Size pendingOutputSize_ {};

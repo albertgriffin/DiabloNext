@@ -36,6 +36,15 @@ constexpr bool AllowStreaming = true;
 constexpr bool AllowStreaming = false;
 #endif
 
+[[nodiscard]] constexpr bool ShouldPreloadEffects()
+{
+#if defined(STREAM_ALL_AUDIO_MIN_FILE_SIZE) && STREAM_ALL_AUDIO_MIN_FILE_SIZE == 0
+	return false;
+#else
+	return true;
+#endif
+}
+
 /** Specifies the sound file and the playback state of the current sound effect. */
 TSFX *sgpStreamSFX = nullptr;
 
@@ -163,6 +172,8 @@ void PrivSoundInit(uint8_t bLoadMask)
 	}
 
 	if (sgSFX.empty()) LoadEffectsData();
+	if (!ShouldPreloadEffects())
+		return;
 
 	for (auto &sfx : sgSFX) {
 		if (sfx.bFlags == 0 || sfx.pSnd != nullptr) {
