@@ -36,6 +36,8 @@ struct RenderLayerStats {
 struct RenderLayerFrameStats {
 	std::array<RenderLayerStats, RenderLayerCount> layers {};
 	RenderLayer currentLayer = RenderLayer::World;
+	uint64_t stampedSpanCount = 0;
+	uint64_t stampedPixelCount = 0;
 };
 
 [[nodiscard]] RenderLayer CurrentRenderLayer();

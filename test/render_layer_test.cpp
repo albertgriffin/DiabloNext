@@ -175,6 +175,23 @@ TEST(RenderLayer, PrimitiveSpansStampLayer)
 	EXPECT_EQ(LayerAt(2, 0), static_cast<uint8_t>(RenderLayer::Debug));
 }
 
+TEST(RenderLayer, TracksLayerCaptureStampCost)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 4, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	BeginTestRenderLayerFrame(out);
+	{
+		RenderLayerScope debugLayer(RenderLayer::Debug);
+		out.SetPixel({ 0, 0 }, 1);
+		DrawHorizontalLine(out, { 1, 0 }, 3, 8);
+	}
+
+	const RenderLayerFrameStats &stats = GetRenderLayerFrameStats();
+	EXPECT_EQ(stats.stampedSpanCount, 2);
+	EXPECT_EQ(stats.stampedPixelCount, 4);
+}
+
 TEST(RenderLayer, ClxOpaqueRunsStampLayer)
 {
 	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 3, 1, 8, SDL_PIXELFORMAT_INDEX8);

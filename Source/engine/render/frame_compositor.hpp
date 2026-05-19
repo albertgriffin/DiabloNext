@@ -18,6 +18,7 @@
 
 #include "engine/rectangle.hpp"
 #include "engine/render/render_layer_diagnostics.hpp"
+#include "engine/render/render_perf.hpp"
 #include "engine/size.hpp"
 #ifdef BUILD_TESTING
 #include "utils/attributes.h"
@@ -91,8 +92,19 @@ public:
 	void ResetDirtyRects();
 	void SetDiagnosticTransformEnabled(bool enabled);
 	[[nodiscard]] const DirtyRectList &GetDirtyRects() const;
+	[[nodiscard]] const RenderPerfCompositionStats &GetLastCompositionStats() const;
 
 private:
+	struct MappedPaletteCache {
+		bool valid = false;
+		SDL_Surface *outputSurface = nullptr;
+		uintptr_t outputFormatIdentity = 0;
+		uint64_t paletteVersion = 0;
+		bool diagnosticTransform = false;
+		std::array<uint32_t, 256> mappedPalette {};
+	};
+
+	[[nodiscard]] const std::array<uint32_t, 256> &GetMappedPalette(bool diagnosticTransform);
 	[[nodiscard]] bool ComposeRect(Rectangle rect);
 
 	Size logicalSize_ {};
@@ -107,6 +119,11 @@ private:
 	uint64_t lastComposedPaletteVersion_ = 0;
 	bool lastComposedDiagnosticTransformEnabled_ = false;
 	RenderLayerDiagnosticMode lastRenderLayerDiagnosticMode_ = RenderLayerDiagnosticMode::Off;
+	bool outputSurfaceChangedSinceComposition_ = false;
+	bool indexBufferChangedSinceComposition_ = false;
+	bool logicalSizeChangedSinceComposition_ = false;
+	RenderPerfCompositionStats lastCompositionStats_ {};
+	MappedPaletteCache mappedPaletteCache_ {};
 };
 
 [[nodiscard]] bool FrameCompositionEnabled();

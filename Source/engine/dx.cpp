@@ -22,6 +22,7 @@
 #include "engine/palette.h"
 #include "engine/render/frame_compositor.hpp"
 #include "engine/render/primitive_render.hpp"
+#include "engine/render/render_perf.hpp"
 #include "headless_mode.hpp"
 #include "init.hpp"
 #include "options.h"
@@ -259,44 +260,53 @@ void RenderPresent()
 
 #ifndef USE_SDL1
 	if (renderer != nullptr) {
+		{
+			RenderPerfScope renderPerfScope(RenderPerfPhase::Present);
 #ifdef USE_SDL3
-		if (!SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255)) ErrSdl();
-		if (!SDL_RenderClear(renderer)) ErrSdl();
-		if (!SDL_UpdateTexture(texture.get(), nullptr, surface->pixels, surface->pitch)) ErrSdl();
-		if (!SDL_RenderTexture(renderer, texture.get(), nullptr, nullptr)) ErrSdl();
+			if (!SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255)) ErrSdl();
+			if (!SDL_RenderClear(renderer)) ErrSdl();
+			if (!SDL_UpdateTexture(texture.get(), nullptr, surface->pixels, surface->pitch)) ErrSdl();
+			if (!SDL_RenderTexture(renderer, texture.get(), nullptr, nullptr)) ErrSdl();
 #else
-		if (SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255) <= -1) ErrSdl();
-		if (SDL_RenderClear(renderer) <= -1) ErrSdl();
-		if (SDL_UpdateTexture(texture.get(), nullptr, surface->pixels, surface->pitch) <= -1) ErrSdl();
-		if (SDL_RenderCopy(renderer, texture.get(), nullptr, nullptr) <= -1) ErrSdl();
+			if (SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255) <= -1) ErrSdl();
+			if (SDL_RenderClear(renderer) <= -1) ErrSdl();
+			if (SDL_UpdateTexture(texture.get(), nullptr, surface->pixels, surface->pitch) <= -1) ErrSdl();
+			if (SDL_RenderCopy(renderer, texture.get(), nullptr, nullptr) <= -1) ErrSdl();
 #endif
 
-		if (ControlMode == ControlTypes::VirtualGamepad) {
-			RenderVirtualGamepad(renderer);
+			if (ControlMode == ControlTypes::VirtualGamepad) {
+				RenderVirtualGamepad(renderer);
+			}
+			SDL_RenderPresent(renderer);
 		}
-		SDL_RenderPresent(renderer);
 
 		if (*GetOptions().Graphics.frameRateControl != FrameRateControl::VerticalSync) {
 			LimitFrameRate();
 		}
 	} else {
-		if (ControlMode == ControlTypes::VirtualGamepad) {
-			RenderVirtualGamepad(surface);
-		}
+		{
+			RenderPerfScope renderPerfScope(RenderPerfPhase::Present);
+			if (ControlMode == ControlTypes::VirtualGamepad) {
+				RenderVirtualGamepad(surface);
+			}
 
 #ifdef USE_SDL3
-		if (!SDL_UpdateWindowSurface(ghMainWnd)) ErrSdl();
+			if (!SDL_UpdateWindowSurface(ghMainWnd)) ErrSdl();
 #else
-		if (SDL_UpdateWindowSurface(ghMainWnd) <= -1) ErrSdl();
+			if (SDL_UpdateWindowSurface(ghMainWnd) <= -1) ErrSdl();
 #endif
 
-		if (RenderDirectlyToOutputSurface)
-			PalSurface = GetOutputSurface();
+			if (RenderDirectlyToOutputSurface)
+				PalSurface = GetOutputSurface();
+		}
 		LimitFrameRate();
 	}
 #else
-	if (SDL_Flip(surface) <= -1) {
-		ErrSdl();
+	{
+		RenderPerfScope renderPerfScope(RenderPerfPhase::Present);
+		if (SDL_Flip(surface) <= -1) {
+			ErrSdl();
+		}
 	}
 	if (RenderDirectlyToOutputSurface)
 		PalSurface = GetOutputSurface();

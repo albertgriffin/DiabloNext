@@ -16,7 +16,6 @@
 #include "levels/dun_tile.hpp"
 #include "levels/gendung.h"
 #include "lighting.h"
-#include "options.h"
 #include "utils/log.hpp"
 #include "utils/sdl_wrap.h"
 
@@ -62,7 +61,6 @@ void InitOnce()
 				}
 			}
 		}
-		GetOptions().Graphics.perPixelLighting.SetValue(false);
 		return true;
 	}();
 }
@@ -70,12 +68,10 @@ void InitOnce()
 void RunForTileMaskLight(benchmark::State &state, TileType tileType, MaskType maskType, const uint8_t *lightTable)
 {
 	const Surface out = Surface(SdlSurface.get());
-	std::array<std::array<uint8_t, LightTableSize>, NumLightingLevels> lightTables;
-	const Lightmap lightmap(/*outBuffer=*/nullptr, /*lightmapBuffer=*/ {}, /*pitch=*/1, lightTables, FullyLitLightTable, FullyDarkLightTable);
 	const std::span<const LevelCelBlock> tiles = Tiles[tileType];
 	for (auto _ : state) {
 		for (const LevelCelBlock &levelCelBlock : tiles) {
-			RenderTile(out, lightmap, Point { 320, 240 }, BmDunCelData.get(), levelCelBlock, maskType, lightTable);
+			RenderTile(out, Point { 320, 240 }, BmDunCelData.get(), levelCelBlock, maskType, lightTable);
 			uint8_t color = out[Point { 310, 200 }];
 			benchmark::DoNotOptimize(color);
 		}

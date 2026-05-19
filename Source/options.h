@@ -538,8 +538,6 @@ struct GraphicsOptions : OptionCategoryBase {
 	OptionEntryInt<int> brightness;
 	/** @brief Zoom on start. */
 	OptionEntryBoolean zoom;
-	/** @brief Subtile lighting for smoother light gradients. */
-	OptionEntryBoolean perPixelLighting;
 	/** @brief Enable color cycling animations. */
 	OptionEntryBoolean colorCycling;
 	/** @brief Use alternate nest palette. */
@@ -566,6 +564,8 @@ struct ExperimentalOptions : OptionCategoryBase {
 	OptionEntryBoolean renderFrameCompositorDiagnosticTransform;
 	/** @brief Visualize render layer ownership in the experimental frame compositor. */
 	OptionEntryEnum<RenderLayerDiagnosticMode> renderLayerDiagnosticMode;
+	/** @brief Log renderer performance telemetry. */
+	OptionEntryBoolean renderPerformanceStats;
 };
 
 struct GameplayOptions : OptionCategoryBase {

@@ -135,6 +135,16 @@ TEST(FrameCompositor, CpuPaletteCompositorRespectsDirtyRects)
 	EXPECT_EQ(ReadColor(*outputSurface, 1, 0).r, 200);
 	EXPECT_EQ(ReadColor(*outputSurface, 1, 0).g, 210);
 	EXPECT_EQ(ReadColor(*outputSurface, 1, 0).b, 220);
+
+	const RenderPerfCompositionStats &stats = compositor.GetLastCompositionStats();
+	EXPECT_FALSE(stats.fullFrameComposed);
+	EXPECT_EQ(stats.fullFrameReason, CompositionFullFrameReason::None);
+	EXPECT_EQ(stats.submittedDirtyRectCount, 1);
+	EXPECT_EQ(stats.normalizedDirtyRectCount, 1);
+	EXPECT_EQ(stats.composedRectCount, 1);
+	EXPECT_EQ(stats.submittedDirtyArea, 1);
+	EXPECT_EQ(stats.normalizedDirtyArea, 1);
+	EXPECT_EQ(stats.composedPixelArea, 1);
 }
 
 TEST(FrameCompositor, CpuPaletteCompositorRecomposesFullFrameWhenPaletteVersionChanges)
@@ -166,6 +176,51 @@ TEST(FrameCompositor, CpuPaletteCompositorRecomposesFullFrameWhenPaletteVersionC
 	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
 	EXPECT_EQ(color.r, 0);
 	EXPECT_EQ(color.g, 255);
+
+	const RenderPerfCompositionStats &stats = compositor.GetLastCompositionStats();
+	EXPECT_TRUE(stats.fullFrameComposed);
+	EXPECT_EQ(stats.fullFrameReason, CompositionFullFrameReason::PaletteChanged);
+	EXPECT_EQ(stats.composedRectCount, 1);
+	EXPECT_EQ(stats.composedPixelArea, 1);
+}
+
+TEST(FrameCompositor, CpuPaletteCompositorInvalidatesMappedPaletteWhenOutputFormatChanges)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 80, 200, 255 };
+
+	SDLSurfaceUniquePtr outputRgba = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+	SDLSurfaceUniquePtr outputBgra = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_BGRA8888);
+
+	CpuPaletteCompositor compositor;
+	compositor.BeginFrame({ 1, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 1));
+	compositor.SetOutputSurface(outputRgba.get());
+	compositor.SetFullFrameDirty();
+	compositor.Compose();
+	compositor.Present();
+
+	SDL_Color color = ReadColor(*outputRgba, 0, 0);
+	EXPECT_EQ(color.r, 10);
+	EXPECT_EQ(color.g, 80);
+	EXPECT_EQ(color.b, 200);
+
+	compositor.BeginFrame({ 1, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 1));
+	compositor.SetOutputSurface(outputBgra.get());
+	compositor.SetFullFrameDirty();
+	compositor.Compose();
+
+	color = ReadColor(*outputBgra, 0, 0);
+	EXPECT_EQ(color.r, 10);
+	EXPECT_EQ(color.g, 80);
+	EXPECT_EQ(color.b, 200);
 }
 
 TEST(FrameCompositor, CpuPaletteCompositorTreatsEmptyDirtyRectsAsInitialFullFrameOnly)
@@ -254,6 +309,16 @@ TEST(FrameCompositor, CpuPaletteCompositorEscalatesManyDirtyRectsToFullFrame)
 
 	EXPECT_EQ(ReadColor(*outputSurface, 0, 0).r, 40);
 	EXPECT_EQ(ReadColor(*outputSurface, Width - 1, 0).r, 40);
+
+	const RenderPerfCompositionStats &stats = compositor.GetLastCompositionStats();
+	EXPECT_TRUE(stats.fullFrameComposed);
+	EXPECT_EQ(stats.fullFrameReason, CompositionFullFrameReason::TooManyDirtyRects);
+	EXPECT_EQ(stats.submittedDirtyRectCount, 65);
+	EXPECT_EQ(stats.normalizedDirtyRectCount, 0);
+	EXPECT_EQ(stats.submittedDirtyArea, 65);
+	EXPECT_EQ(stats.normalizedDirtyArea, Width);
+	EXPECT_EQ(stats.composedRectCount, 1);
+	EXPECT_EQ(stats.composedPixelArea, Width);
 }
 
 TEST(FrameCompositor, CpuPaletteCompositorAppliesDiagnosticTransformAfterPaletteExpansion)
@@ -508,6 +573,9 @@ TEST(FrameCompositor, CpuPaletteCompositorComposesLargeDiagnosticFrameAcrossRowB
 	ExpectWorldTint(*outputSurface, Width - 3, 191, palette[2]);
 	ExpectWorldTint(*outputSurface, 43, 192, palette[2]);
 	ExpectWorldTint(*outputSurface, Width - 3, Height - 1, palette[3]);
+
+	const RenderPerfCompositionStats &stats = compositor.GetLastCompositionStats();
+	EXPECT_EQ(stats.selectedThreadCount, 4);
 }
 
 } // namespace
