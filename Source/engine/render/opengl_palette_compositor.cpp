@@ -43,8 +43,6 @@
 namespace devilution {
 namespace {
 
-constexpr std::string_view OpenGlBackendName = "opengl-palette";
-
 [[nodiscard]] bool OpenGlPaletteCompositorBuildAvailable()
 {
 	return DEVILUTIONX_OPENGL_PALETTE_COMPOSITOR_ACTIVE != 0;
@@ -63,6 +61,8 @@ constexpr std::string_view OpenGlBackendName = "opengl-palette";
 }
 
 #if DEVILUTIONX_OPENGL_PALETTE_COMPOSITOR_ACTIVE
+
+constexpr std::string_view OpenGlBackendName = "opengl-palette";
 
 [[nodiscard]] bool SdlGlMakeCurrent(SDL_Window *window, SDL_GLContext context)
 {
