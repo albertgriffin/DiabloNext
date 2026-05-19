@@ -52,6 +52,28 @@ struct DirtyRectList {
 	bool fullFrame = false;
 };
 
+enum class CompositionSurfaceRole : uint8_t {
+	World,
+	WorldOverlay,
+	Interface,
+	Cursor,
+	DiagnosticOverlay,
+	Count,
+};
+
+inline constexpr size_t CompositionSurfaceRoleCount = static_cast<size_t>(CompositionSurfaceRole::Count);
+
+struct CompositionSurfaceRoleCoverage {
+	uint32_t dirtyRectCount = 0;
+	uint64_t dirtyPixelArea = 0;
+	Rectangle dirtyBounds;
+	bool fullFrameDirty = false;
+};
+
+struct CompositionSurfaceMetadata {
+	std::array<CompositionSurfaceRoleCoverage, CompositionSurfaceRoleCount> roles {};
+};
+
 struct CompositionFrame {
 	Size logicalSize;
 	IndexBufferView indexBuffer;
@@ -60,6 +82,7 @@ struct CompositionFrame {
 	bool diagnosticTransform = false;
 	RenderLayerDiagnosticMode renderLayerDiagnosticMode = RenderLayerDiagnosticMode::Off;
 	RenderLayerMapView renderLayerMap;
+	CompositionSurfaceMetadata compositionSurfaceMetadata;
 };
 
 enum class FrameCompositorBackendResult : uint8_t {
@@ -110,11 +133,14 @@ public:
 
 	void SetOutputSurface(SDL_Surface *outputSurface);
 	void AddDirtyRect(Rectangle rect);
+	void AddDirtyRect(Rectangle rect, CompositionSurfaceRole role);
 	void SetFullFrameDirty();
+	void SetFullFrameDirty(CompositionSurfaceRole role);
 	void ResetDirtyRects();
 	void SetDiagnosticTransformEnabled(bool enabled);
 	void SetBackend(std::unique_ptr<IFrameCompositorBackend> backend);
 	[[nodiscard]] const DirtyRectList &GetDirtyRects() const;
+	[[nodiscard]] const CompositionSurfaceMetadata &GetCompositionSurfaceMetadata() const;
 	[[nodiscard]] const RenderPerfCompositionStats &GetLastCompositionStats() const;
 	[[nodiscard]] FrameCompositorBackendResult GetLastBackendResult() const;
 
@@ -126,6 +152,7 @@ private:
 	IndexBufferView indexBuffer_ {};
 	PaletteSnapshot palette_ {};
 	DirtyRectList dirtyRects_ {};
+	CompositionSurfaceMetadata compositionSurfaceMetadata_ {};
 	SDL_Surface *outputSurface_ = nullptr;
 	bool diagnosticTransformEnabled_ = false;
 	RenderLayerDiagnosticMode renderLayerDiagnosticMode_ = RenderLayerDiagnosticMode::Off;

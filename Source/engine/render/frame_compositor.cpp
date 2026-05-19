@@ -193,6 +193,11 @@ struct NormalizedDirtyRects {
 	return static_cast<uint64_t>(size.width) * static_cast<uint64_t>(size.height);
 }
 
+[[nodiscard]] size_t CompositionSurfaceRoleIndex(const CompositionSurfaceRole role)
+{
+	return static_cast<size_t>(role);
+}
+
 [[nodiscard]] int BytesPerPixel(const SDL_Surface &surface)
 {
 #ifdef USE_SDL3
@@ -340,6 +345,64 @@ void PutPixelBytes(uint8_t *dst, const int bytesPerPixel, const uint32_t pixel)
 	const int x1 = std::max(a.position.x + a.size.width, b.position.x + b.size.width);
 	const int y1 = std::max(a.position.y + a.size.height, b.position.y + b.size.height);
 	return { { x0, y0 }, { x1 - x0, y1 - y0 } };
+}
+
+void AccumulateCompositionSurfaceDirtyRect(CompositionSurfaceMetadata &metadata, const CompositionSurfaceRole role, const Rectangle rect)
+{
+	if (IsEmpty(rect))
+		return;
+	const size_t roleIndex = CompositionSurfaceRoleIndex(role);
+	if (roleIndex >= CompositionSurfaceRoleCount)
+		return;
+
+	CompositionSurfaceRoleCoverage &coverage = metadata.roles[roleIndex];
+	coverage.dirtyBounds = coverage.dirtyRectCount == 0 ? rect : Union(coverage.dirtyBounds, rect);
+	coverage.dirtyRectCount++;
+	coverage.dirtyPixelArea += Area(rect);
+}
+
+void AccumulateCompositionSurfaceFullFrame(CompositionSurfaceMetadata &metadata, const CompositionSurfaceRole role)
+{
+	const size_t roleIndex = CompositionSurfaceRoleIndex(role);
+	if (roleIndex >= CompositionSurfaceRoleCount)
+		return;
+	metadata.roles[roleIndex].fullFrameDirty = true;
+}
+
+[[nodiscard]] CompositionSurfaceMetadata WithFullFrameCompositionSurfaceBounds(CompositionSurfaceMetadata metadata, const Size logicalSize)
+{
+	if (logicalSize.width <= 0 || logicalSize.height <= 0)
+		return metadata;
+
+	const Rectangle fullFrame { { 0, 0 }, logicalSize };
+	const uint64_t fullFrameArea = Area(logicalSize);
+	for (CompositionSurfaceRoleCoverage &coverage : metadata.roles) {
+		if (!coverage.fullFrameDirty)
+			continue;
+		coverage.dirtyBounds = fullFrame;
+		coverage.dirtyPixelArea = std::max(coverage.dirtyPixelArea, fullFrameArea);
+		if (coverage.dirtyRectCount == 0)
+			coverage.dirtyRectCount = 1;
+	}
+	return metadata;
+}
+
+[[nodiscard]] CompositionSurfaceRole CompositionSurfaceRoleForRenderLayer(const RenderLayer layer)
+{
+	switch (layer) {
+	case RenderLayer::World:
+		return CompositionSurfaceRole::World;
+	case RenderLayer::WorldOverlay:
+		return CompositionSurfaceRole::WorldOverlay;
+	case RenderLayer::Interface:
+		return CompositionSurfaceRole::Interface;
+	case RenderLayer::Cursor:
+		return CompositionSurfaceRole::Cursor;
+	case RenderLayer::Debug:
+	case RenderLayer::Count:
+		return CompositionSurfaceRole::DiagnosticOverlay;
+	}
+	return CompositionSurfaceRole::DiagnosticOverlay;
 }
 
 void MergeOverlapsAt(std::vector<Rectangle> &rects, size_t index)
@@ -754,19 +817,32 @@ void CpuPaletteCompositor::SetOutputSurface(SDL_Surface *outputSurface)
 
 void CpuPaletteCompositor::AddDirtyRect(Rectangle rect)
 {
+	AddDirtyRect(rect, CompositionSurfaceRole::World);
+}
+
+void CpuPaletteCompositor::AddDirtyRect(Rectangle rect, const CompositionSurfaceRole role)
+{
 	if (rect.size.width <= 0 || rect.size.height <= 0)
 		return;
 	dirtyRects_.rects.push_back(rect);
+	AccumulateCompositionSurfaceDirtyRect(compositionSurfaceMetadata_, role, rect);
 }
 
 void CpuPaletteCompositor::SetFullFrameDirty()
 {
+	SetFullFrameDirty(CompositionSurfaceRole::World);
+}
+
+void CpuPaletteCompositor::SetFullFrameDirty(const CompositionSurfaceRole role)
+{
 	dirtyRects_.fullFrame = true;
+	AccumulateCompositionSurfaceFullFrame(compositionSurfaceMetadata_, role);
 }
 
 void CpuPaletteCompositor::ResetDirtyRects()
 {
 	dirtyRects_ = {};
+	compositionSurfaceMetadata_ = {};
 }
 
 void CpuPaletteCompositor::SetDiagnosticTransformEnabled(const bool enabled)
@@ -785,6 +861,11 @@ void CpuPaletteCompositor::SetBackend(std::unique_ptr<IFrameCompositorBackend> b
 const DirtyRectList &CpuPaletteCompositor::GetDirtyRects() const
 {
 	return dirtyRects_;
+}
+
+const CompositionSurfaceMetadata &CpuPaletteCompositor::GetCompositionSurfaceMetadata() const
+{
+	return compositionSurfaceMetadata_;
 }
 
 const RenderPerfCompositionStats &CpuPaletteCompositor::GetLastCompositionStats() const
@@ -812,6 +893,7 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 	diagnosticTransformEnabled_ = frame.diagnosticTransform;
 	renderLayerDiagnosticMode_ = frame.renderLayerDiagnosticMode;
 	renderLayerMap_ = frame.renderLayerMap;
+	compositionSurfaceMetadata_ = WithFullFrameCompositionSurfaceBounds(frame.compositionSurfaceMetadata, frame.logicalSize);
 
 	lastCompositionStats_ = {};
 	lastCompositionStats_.compositorEnabled = true;
@@ -884,6 +966,7 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 		                                                             diagnosticTransformEnabled_,
 		                                                             renderLayerDiagnosticMode_,
 		                                                             renderLayerMap_,
+		                                                             compositionSurfaceMetadata_,
 		                                                         },
 		    rects);
 		if (result == FrameCompositorBackendResult::None) {
@@ -927,6 +1010,7 @@ void CpuPaletteCompositor::Compose()
 	    diagnosticTransformEnabled_,
 	    renderLayerDiagnosticMode_,
 	    renderLayerMap_,
+	    compositionSurfaceMetadata_,
 	});
 }
 
@@ -944,14 +1028,16 @@ bool FrameCompositionEnabled()
 
 void SubmitFrameCompositionDirtyRect(Rectangle rect)
 {
-	RecordRenderLayerDirtyRect(CurrentRenderLayer());
-	FrameCompositor.AddDirtyRect(rect);
+	const RenderLayer layer = CurrentRenderLayer();
+	RecordRenderLayerDirtyRect(layer);
+	FrameCompositor.AddDirtyRect(rect, CompositionSurfaceRoleForRenderLayer(layer));
 }
 
 void SubmitFrameCompositionFullFrame()
 {
-	RecordRenderLayerDirtyRect(CurrentRenderLayer());
-	FrameCompositor.SetFullFrameDirty();
+	const RenderLayer layer = CurrentRenderLayer();
+	RecordRenderLayerDirtyRect(layer);
+	FrameCompositor.SetFullFrameDirty(CompositionSurfaceRoleForRenderLayer(layer));
 }
 
 void ResetFrameCompositionDirtyRects()
@@ -978,6 +1064,7 @@ bool ComposeFrameToOutput(SDL_Surface *outputSurface)
 		    *GetOptions().Experimental.renderFrameCompositorDiagnosticTransform,
 		    *GetOptions().Experimental.renderLayerDiagnosticMode,
 		    CurrentRenderLayerMapView(),
+		    FrameCompositor.GetCompositionSurfaceMetadata(),
 		});
 	}
 	const FrameCompositorBackendResult backendResult = FrameCompositor.GetLastBackendResult();
