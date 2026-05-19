@@ -574,12 +574,13 @@ private:
 		if (rect.size.width == 0 || rect.size.height == 0)
 			return false;
 
-		const bool mustLock = SDL_MUSTLOCK(&outputSurface);
+		SDL_Surface *outputSurfacePtr = &outputSurface;
+		const bool mustLock = SDL_MUSTLOCK(outputSurfacePtr);
 		if (mustLock) {
 #ifdef USE_SDL3
-			if (!SDL_LockSurface(&outputSurface)) ErrSdl();
+			if (!SDL_LockSurface(outputSurfacePtr)) ErrSdl();
 #else
-			if (SDL_LockSurface(&outputSurface) < 0) ErrSdl();
+			if (SDL_LockSurface(outputSurfacePtr) < 0) ErrSdl();
 #endif
 		}
 
@@ -688,7 +689,7 @@ private:
 #endif
 
 		if (mustLock)
-			SDL_UnlockSurface(&outputSurface);
+			SDL_UnlockSurface(outputSurfacePtr);
 		return true;
 	}
 

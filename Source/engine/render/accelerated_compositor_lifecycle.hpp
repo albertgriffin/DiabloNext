@@ -11,6 +11,8 @@
 
 #ifdef USE_SDL3
 #include <SDL3/SDL_video.h>
+#elif defined(USE_SDL1)
+#include "utils/sdl2_to_1_2_backports.h"
 #else
 #include <SDL.h>
 #endif
