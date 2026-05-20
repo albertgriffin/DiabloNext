@@ -109,20 +109,29 @@ public:
 		return available;
 	}
 
-	bool PrepareIndexedFrame(const AcceleratedPaletteFrame &frame) override
+	bool PrepareIndexedFrame(const AcceleratedPaletteFrame &frame, RenderPerfCompositionStats &stats) override
 	{
 		indexedFrameCallCount++;
 		observedIndexedFrame = frame.composition;
 		observedIndexedLighting = frame.lighting;
+		observedUploadDirtyRects.assign(frame.uploadDirtyRects.begin(), frame.uploadDirtyRects.end());
+		if (!indexedFrameResult) {
+			stats.failedUploadCount++;
+			stats.uploadFallbackReason = CompositionUploadFallbackReason::SubmitFailed;
+		}
 		return indexedFrameResult;
 	}
 
-	bool PrepareOutputSurfaceFrame(const AcceleratedPaletteFrame &frame, SDL_Surface &outputSurface) override
+	bool PrepareOutputSurfaceFrame(const AcceleratedPaletteFrame &frame, SDL_Surface &outputSurface, RenderPerfCompositionStats &stats) override
 	{
 		outputSurfaceFrameCallCount++;
 		observedOutputFrame = frame.composition;
 		observedOutputSurface = &outputSurface;
 		observedOutputLighting = frame.lighting;
+		if (!outputSurfaceFrameResult) {
+			stats.failedUploadCount++;
+			stats.uploadFallbackReason = CompositionUploadFallbackReason::SubmitFailed;
+		}
 		return outputSurfaceFrameResult;
 	}
 
@@ -141,6 +150,7 @@ public:
 	CompositionFrame observedOutputFrame {};
 	const CompositionLightingInputs *observedIndexedLighting = nullptr;
 	const CompositionLightingInputs *observedOutputLighting = nullptr;
+	std::vector<Rectangle> observedUploadDirtyRects;
 	SDL_Surface *observedOutputSurface = nullptr;
 };
 
@@ -205,6 +215,78 @@ TEST(FrameCompositor, NeutralCompositionLightingInputsPrepareNoOpBuffers)
 
 	EXPECT_EQ(lightingInputs.Prepare({ 0, 1 }), nullptr);
 	EXPECT_EQ(lightingInputs.Get(), nullptr);
+}
+
+TEST(FrameCompositor, PlansUnchangedAttachmentUploadAsSkip)
+{
+	std::array<uint8_t, 16> pixels {};
+	CompositionAttachment attachment {
+		CompositionAttachmentRole::IndexedAlbedo,
+		CompositionAttachmentFormat::Index8,
+		{ 4, 4 },
+		4,
+		7,
+		{},
+		pixels.data(),
+	};
+
+	const CompositionAttachmentUploadPlan plan = PlanCompositionAttachmentUpload(attachment, true, 7);
+
+	EXPECT_EQ(plan.action, CompositionAttachmentUploadAction::Skip);
+	EXPECT_TRUE(plan.rects.empty());
+	EXPECT_EQ(plan.byteCount, 0);
+}
+
+TEST(FrameCompositor, PlansChangedAttachmentDirtyRegionsAsPartialUpload)
+{
+	std::array<uint8_t, 16> pixels {};
+	CompositionAttachment attachment {
+		CompositionAttachmentRole::IndexedAlbedo,
+		CompositionAttachmentFormat::Index8,
+		{ 4, 4 },
+		4,
+		7,
+		{ { { { 1, 1 }, { 2, 2 } }, { { 3, 0 }, { 4, 1 } } }, false },
+		pixels.data(),
+	};
+
+	const CompositionAttachmentUploadPlan plan = PlanCompositionAttachmentUpload(attachment, true, 7);
+
+	EXPECT_EQ(plan.action, CompositionAttachmentUploadAction::Partial);
+	ASSERT_EQ(plan.rects.size(), 2);
+	EXPECT_EQ(plan.rects[0].position.x, 1);
+	EXPECT_EQ(plan.rects[0].position.y, 1);
+	EXPECT_EQ(plan.rects[0].size.width, 2);
+	EXPECT_EQ(plan.rects[0].size.height, 2);
+	EXPECT_EQ(plan.rects[1].position.x, 3);
+	EXPECT_EQ(plan.rects[1].position.y, 0);
+	EXPECT_EQ(plan.rects[1].size.width, 1);
+	EXPECT_EQ(plan.rects[1].size.height, 1);
+	EXPECT_EQ(plan.byteCount, 5);
+}
+
+TEST(FrameCompositor, PlansBackendResetAsFullUploadEvenWhenVersionMatches)
+{
+	std::array<uint8_t, 16> pixels {};
+	CompositionAttachment attachment {
+		CompositionAttachmentRole::LightAccumulation,
+		CompositionAttachmentFormat::Rgba8,
+		{ 2, 2 },
+		8,
+		11,
+		{},
+		pixels.data(),
+	};
+
+	const CompositionAttachmentUploadPlan plan = PlanCompositionAttachmentUpload(attachment, false, 11);
+
+	EXPECT_EQ(plan.action, CompositionAttachmentUploadAction::Full);
+	ASSERT_EQ(plan.rects.size(), 1);
+	EXPECT_EQ(plan.rects[0].position.x, 0);
+	EXPECT_EQ(plan.rects[0].position.y, 0);
+	EXPECT_EQ(plan.rects[0].size.width, 2);
+	EXPECT_EQ(plan.rects[0].size.height, 2);
+	EXPECT_EQ(plan.byteCount, 16);
 }
 
 TEST(FrameCompositor, MakesIndexBufferViewFromEightBitSurface)
@@ -447,18 +529,30 @@ TEST(FrameCompositor, AcceleratedPaletteBackendPresentsIndexedFrame)
 	EXPECT_EQ(presenterPtr->outputSurfaceFrameCallCount, 0);
 	EXPECT_EQ(presenterPtr->observedIndexedFrame.indexBuffer.pixels, pixels);
 	EXPECT_EQ(presenterPtr->observedIndexedFrame.palette.version, 42);
+	const CompositionAttachment *indexAttachment = FindCompositionAttachment(presenterPtr->observedIndexedFrame.attachments, CompositionAttachmentRole::IndexedAlbedo);
+	ASSERT_NE(indexAttachment, nullptr);
+	EXPECT_EQ(indexAttachment->format, CompositionAttachmentFormat::Index8);
+	EXPECT_EQ(indexAttachment->logicalSize.width, 1);
+	EXPECT_EQ(indexAttachment->logicalSize.height, 1);
+	EXPECT_TRUE(indexAttachment->dirtyRects.fullFrame);
+	const CompositionAttachment *paletteAttachment = FindCompositionAttachment(presenterPtr->observedIndexedFrame.attachments, CompositionAttachmentRole::Palette);
+	ASSERT_NE(paletteAttachment, nullptr);
+	EXPECT_EQ(paletteAttachment->format, CompositionAttachmentFormat::PaletteRgba8);
+	EXPECT_EQ(paletteAttachment->version, 42);
 	ASSERT_NE(presenterPtr->observedIndexedLighting, nullptr);
 	EXPECT_TRUE(presenterPtr->observedIndexedLighting->light.IsValid());
 	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.size.width, 1);
 	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.size.height, 1);
 	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.pitch, 4);
 	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.format, CompositionLightingBufferFormat::Rgba8);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.version, 1);
 	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.pixels[0], 255);
 	EXPECT_TRUE(presenterPtr->observedIndexedLighting->shadow.IsValid());
 	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.size.width, 1);
 	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.size.height, 1);
 	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.pitch, 1);
 	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.format, CompositionLightingBufferFormat::Alpha8);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.version, 1);
 	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.pixels[0], 0);
 	EXPECT_EQ(compositor.GetLastCompositionStats().selectedThreadCount, 1);
 
@@ -504,6 +598,7 @@ TEST(FrameCompositor, AcceleratedPaletteBackendRetainsNoDirtyDirectPresentationE
 	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 1);
 	EXPECT_EQ(presenterPtr->outputSurfaceFrameCallCount, 0);
 	EXPECT_EQ(compositor.GetLastCompositionStats().composedRectCount, 0);
+	EXPECT_EQ(compositor.GetLastCompositionStats().backendRetainedDirectPresentationCount, 1);
 
 	compositor.Present();
 	EXPECT_EQ(presenterPtr->presentCallCount, 2);
@@ -537,6 +632,11 @@ TEST(FrameCompositor, AcceleratedPaletteBackendForwardsCompositionSurfaceMetadat
 
 	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
 	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 1);
+	ASSERT_EQ(presenterPtr->observedUploadDirtyRects.size(), 1);
+	EXPECT_EQ(presenterPtr->observedUploadDirtyRects[0].position.x, 1);
+	EXPECT_EQ(presenterPtr->observedUploadDirtyRects[0].position.y, 0);
+	EXPECT_EQ(presenterPtr->observedUploadDirtyRects[0].size.width, 1);
+	EXPECT_EQ(presenterPtr->observedUploadDirtyRects[0].size.height, 2);
 	const CompositionSurfaceRoleCoverage &diagnosticOverlay = Coverage(presenterPtr->observedIndexedFrame.compositionSurfaceMetadata, CompositionSurfaceRole::DiagnosticOverlay);
 	EXPECT_EQ(diagnosticOverlay.dirtyRectCount, 1);
 	EXPECT_EQ(diagnosticOverlay.dirtyPixelArea, 2);
@@ -600,6 +700,8 @@ TEST(FrameCompositor, AcceleratedPaletteBackendForwardsLightingInputs)
 		{ 1, 1 },
 		4,
 		CompositionLightingBufferFormat::Rgba8,
+		9,
+		{},
 	};
 	EXPECT_TRUE(lightingInputs.light.IsValid());
 
@@ -652,6 +754,8 @@ TEST(FrameCompositor, AcceleratedPaletteBackendUploadsCpuPixelsWhenIndexedUpload
 	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
 	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 1);
 	EXPECT_EQ(presenterPtr->outputSurfaceFrameCallCount, 1);
+	EXPECT_EQ(compositor.GetLastCompositionStats().failedUploadCount, 1);
+	EXPECT_EQ(compositor.GetLastCompositionStats().uploadFallbackReason, CompositionUploadFallbackReason::SubmitFailed);
 	EXPECT_EQ(presenterPtr->observedOutputSurface, outputSurface.get());
 	EXPECT_EQ(presenterPtr->observedOutputFrame.indexBuffer.pixels, pixels);
 	EXPECT_EQ(presenterPtr->observedOutputLighting, nullptr);
@@ -690,6 +794,8 @@ TEST(FrameCompositor, AcceleratedPaletteBackendLeavesCpuSurfaceResultWhenAllUplo
 	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::UpdatedOutputSurface);
 	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 1);
 	EXPECT_EQ(presenterPtr->outputSurfaceFrameCallCount, 1);
+	EXPECT_EQ(compositor.GetLastCompositionStats().failedUploadCount, 2);
+	EXPECT_EQ(compositor.GetLastCompositionStats().uploadFallbackReason, CompositionUploadFallbackReason::SubmitFailed);
 	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
 	EXPECT_EQ(color.r, palette[1].r);
 	EXPECT_EQ(color.g, palette[1].g);
@@ -998,6 +1104,7 @@ TEST(FrameCompositor, RenderLayerDiagnosticOffKeepsPaletteExactOutput)
 	    RenderLayerDiagnosticMode::Off,
 	    { layerMap.data(), 1, 1, 1 },
 	    {},
+	    {},
 	});
 
 	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
@@ -1028,6 +1135,7 @@ TEST(FrameCompositor, RenderLayerDiagnosticTintBlendsLayerColor)
 	    false,
 	    RenderLayerDiagnosticMode::Tint,
 	    { layerMap.data(), 1, 1, 1 },
+	    {},
 	    {},
 	});
 
@@ -1063,6 +1171,7 @@ TEST(FrameCompositor, RenderLayerDiagnosticOutlineMarksLayerBoundaries)
 	    false,
 	    RenderLayerDiagnosticMode::Outline,
 	    { layerMap.data(), 2, 1, 2 },
+	    {},
 	    {},
 	});
 
@@ -1106,6 +1215,7 @@ TEST(FrameCompositor, RenderLayerDiagnosticTintAndOutlineCombinesEffects)
 	    RenderLayerDiagnosticMode::TintAndOutline,
 	    { layerMap.data(), 3, 1, 3 },
 	    {},
+	    {},
 	});
 
 	const SDL_Color worldBoundary = ReadColor(*outputSurface, 0, 0);
@@ -1142,6 +1252,7 @@ TEST(FrameCompositor, RenderLayerDiagnosticRecomposesFullFrameWithoutDirtyRects)
 		false,
 		RenderLayerDiagnosticMode::Tint,
 		{ layerMap.data(), 1, 1, 1 },
+		{},
 		{},
 	};
 	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
@@ -1196,6 +1307,7 @@ TEST(FrameCompositor, CpuPaletteCompositorComposesLargeDiagnosticFrameAcrossRowB
 	    false,
 	    RenderLayerDiagnosticMode::TintAndOutline,
 	    { layerMap.data(), Width, Height, Width },
+	    {},
 	    {},
 	});
 

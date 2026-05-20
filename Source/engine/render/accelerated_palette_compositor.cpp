@@ -67,7 +67,7 @@ public:
 				Log("{} using CPU pixel fallback for diagnostics", Name());
 				loggedCpuFallback_ = true;
 			}
-			if (!presenter_->PrepareOutputSurfaceFrame({ frame, lightingInputs_ }, outputSurface)) {
+			if (!presenter_->PrepareOutputSurfaceFrame({ frame, lightingInputs_, rects }, outputSurface, stats)) {
 				hasDirectPresentationFrame_ = false;
 				return fallbackResult;
 			}
@@ -77,13 +77,13 @@ public:
 
 		stats.selectedThreadCount = std::max(stats.selectedThreadCount, 1);
 		const CompositionLightingInputs *lightingInputs = LightingInputsForIndexedFrame(frame.logicalSize);
-		if (!presenter_->PrepareIndexedFrame({ frame, lightingInputs })) {
+		if (!presenter_->PrepareIndexedFrame({ frame, lightingInputs, rects }, stats)) {
 			const FrameCompositorBackendResult fallbackResult = cpuFallback_->Compose(frame, outputSurface, rects, stats);
 			if (fallbackResult == FrameCompositorBackendResult::NoFrameProduced) {
 				hasDirectPresentationFrame_ = false;
 				return FrameCompositorBackendResult::NoFrameProduced;
 			}
-			if (PresenterAvailable() && presenter_->PrepareOutputSurfaceFrame({ frame, lightingInputs_ }, outputSurface)) {
+			if (PresenterAvailable() && presenter_->PrepareOutputSurfaceFrame({ frame, lightingInputs_, rects }, outputSurface, stats)) {
 				hasDirectPresentationFrame_ = true;
 				return FrameCompositorBackendResult::PreparedDirectPresentation;
 			}
@@ -147,12 +147,16 @@ const CompositionLightingInputs *NeutralCompositionLightingInputs::Prepare(const
 		size,
 		static_cast<int>(lightPitch),
 		CompositionLightingBufferFormat::Rgba8,
+		1,
+		{},
 	};
 	inputs_.shadow = {
 		shadowPixels_.data(),
 		size,
 		static_cast<int>(shadowPitch),
 		CompositionLightingBufferFormat::Alpha8,
+		1,
+		{},
 	};
 	return &inputs_;
 }

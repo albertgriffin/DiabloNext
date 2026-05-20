@@ -88,6 +88,17 @@ void AccumulateFrame()
 	RollingStats.submittedDirtyArea += composition.submittedDirtyArea;
 	RollingStats.normalizedDirtyArea += composition.normalizedDirtyArea;
 	RollingStats.composedPixelArea += composition.composedPixelArea;
+	RollingStats.uploadBytes += composition.uploadBytes;
+	RollingStats.uploadedRectCount += composition.uploadedRectCount;
+	RollingStats.skippedUploadCount += composition.skippedUploadCount;
+	RollingStats.fullUploadCount += composition.fullUploadCount;
+	RollingStats.failedUploadCount += composition.failedUploadCount;
+	if (composition.uploadFallbackReason != CompositionUploadFallbackReason::None)
+		RollingStats.lastUploadFallbackReason = composition.uploadFallbackReason;
+	RollingStats.backendNoFrameProducedCount += composition.backendNoFrameProducedCount;
+	RollingStats.backendUpdatedOutputSurfaceCount += composition.backendUpdatedOutputSurfaceCount;
+	RollingStats.backendPreparedDirectPresentationCount += composition.backendPreparedDirectPresentationCount;
+	RollingStats.backendRetainedDirectPresentationCount += composition.backendRetainedDirectPresentationCount;
 	RollingStats.maxSelectedThreadCount = std::max(RollingStats.maxSelectedThreadCount, composition.selectedThreadCount);
 	RollingStats.layerStampedSpanCount += CurrentFrame.layerStampedSpanCount;
 	RollingStats.layerStampedPixelCount += CurrentFrame.layerStampedPixelCount;
@@ -99,7 +110,7 @@ void LogRollingStats()
 	if (frames == 0)
 		return;
 
-	Log("RenderPerf frames={} avg_us cursor_undraw={} world={} interface={} cursor={} debug={} dirty_blit={} compose={} present={} world_detail setup={} lightmap={} floor={} tiles={} oob={} zoom={} overlay={} debug={} view_ui={} layer_setup={} tile_detail cell={} missile={} corpse={} object={} item={} player={} monster={} special={} dirty_rects submitted={} normalized={} composed={} dirty_area submitted={} normalized={} composed={} full_frames={} last_full_reason={} parallel_frames={} max_threads={} layer_spans={} layer_pixels={}",
+	Log("RenderPerf frames={} avg_us cursor_undraw={} world={} interface={} cursor={} debug={} dirty_blit={} compose={} present={} world_detail setup={} lightmap={} floor={} tiles={} oob={} zoom={} overlay={} debug={} view_ui={} layer_setup={} tile_detail cell={} missile={} corpse={} object={} item={} player={} monster={} special={} dirty_rects submitted={} normalized={} composed={} dirty_area submitted={} normalized={} composed={} full_frames={} last_full_reason={} parallel_frames={} max_threads={} upload bytes={} rects={} skipped={} full={} failed={} last_upload_fallback={} backend_results no_frame={} cpu_surface={} direct_prepared={} direct_retained={} layer_spans={} layer_pixels={}",
 	    frames,
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::CursorUndraw)], frames),
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::WorldDraw)], frames),
@@ -137,6 +148,16 @@ void LogRollingStats()
 	    CompositionFullFrameReasonName(RollingStats.lastFullFrameReason),
 	    RollingStats.parallelCompositionCount,
 	    RollingStats.maxSelectedThreadCount,
+	    Average(RollingStats.uploadBytes, frames),
+	    Average(RollingStats.uploadedRectCount, frames),
+	    Average(RollingStats.skippedUploadCount, frames),
+	    Average(RollingStats.fullUploadCount, frames),
+	    Average(RollingStats.failedUploadCount, frames),
+	    CompositionUploadFallbackReasonName(RollingStats.lastUploadFallbackReason),
+	    RollingStats.backendNoFrameProducedCount,
+	    RollingStats.backendUpdatedOutputSurfaceCount,
+	    RollingStats.backendPreparedDirectPresentationCount,
+	    RollingStats.backendRetainedDirectPresentationCount,
 	    Average(RollingStats.layerStampedSpanCount, frames),
 	    Average(RollingStats.layerStampedPixelCount, frames));
 }
@@ -172,6 +193,31 @@ std::string_view CompositionFullFrameReasonName(const CompositionFullFrameReason
 		return "logical-size-changed";
 	case CompositionFullFrameReason::DirectPresentationUnavailable:
 		return "direct-presentation-unavailable";
+	}
+	return "unknown";
+}
+
+std::string_view CompositionUploadFallbackReasonName(const CompositionUploadFallbackReason reason)
+{
+	switch (reason) {
+	case CompositionUploadFallbackReason::None:
+		return "none";
+	case CompositionUploadFallbackReason::InvalidFrame:
+		return "invalid-frame";
+	case CompositionUploadFallbackReason::InvalidLightingInputs:
+		return "invalid-lighting-inputs";
+	case CompositionUploadFallbackReason::UploadSizeTooLarge:
+		return "upload-size-too-large";
+	case CompositionUploadFallbackReason::ResourceUnavailable:
+		return "resource-unavailable";
+	case CompositionUploadFallbackReason::TransferMapFailed:
+		return "transfer-map-failed";
+	case CompositionUploadFallbackReason::CommandBufferUnavailable:
+		return "command-buffer-unavailable";
+	case CompositionUploadFallbackReason::CopyPassUnavailable:
+		return "copy-pass-unavailable";
+	case CompositionUploadFallbackReason::SubmitFailed:
+		return "submit-failed";
 	}
 	return "unknown";
 }

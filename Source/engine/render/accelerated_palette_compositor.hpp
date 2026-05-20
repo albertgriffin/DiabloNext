@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -30,6 +31,8 @@ struct CompositionLightingBufferView {
 	Size size;
 	int pitch = 0;
 	CompositionLightingBufferFormat format = CompositionLightingBufferFormat::Rgba8;
+	uint64_t version = 0;
+	DirtyRectList dirtyRects;
 
 	[[nodiscard]] bool IsValid() const
 	{
@@ -57,6 +60,7 @@ private:
 struct AcceleratedPaletteFrame {
 	const CompositionFrame &composition;
 	const CompositionLightingInputs *lighting = nullptr;
+	std::span<const Rectangle> uploadDirtyRects;
 };
 
 class IAcceleratedPalettePresenter {
@@ -65,8 +69,8 @@ public:
 
 	[[nodiscard]] virtual std::string_view Name() const = 0;
 	[[nodiscard]] virtual bool IsAvailable() const = 0;
-	[[nodiscard]] virtual bool PrepareIndexedFrame(const AcceleratedPaletteFrame &frame) = 0;
-	[[nodiscard]] virtual bool PrepareOutputSurfaceFrame(const AcceleratedPaletteFrame &frame, SDL_Surface &outputSurface) = 0;
+	[[nodiscard]] virtual bool PrepareIndexedFrame(const AcceleratedPaletteFrame &frame, RenderPerfCompositionStats &stats) = 0;
+	[[nodiscard]] virtual bool PrepareOutputSurfaceFrame(const AcceleratedPaletteFrame &frame, SDL_Surface &outputSurface, RenderPerfCompositionStats &stats) = 0;
 	virtual void Present() = 0;
 };
 

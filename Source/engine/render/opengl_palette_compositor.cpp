@@ -604,13 +604,15 @@ public:
 		return OpenGlState().IsAvailable();
 	}
 
-	bool PrepareIndexedFrame(const AcceleratedPaletteFrame &frame) override
+	bool PrepareIndexedFrame(const AcceleratedPaletteFrame &frame, RenderPerfCompositionStats &stats) override
 	{
+		(void)stats;
 		return OpenGlState().PrepareIndexedFrame(frame.composition);
 	}
 
-	bool PrepareOutputSurfaceFrame(const AcceleratedPaletteFrame &frame, SDL_Surface &outputSurface) override
+	bool PrepareOutputSurfaceFrame(const AcceleratedPaletteFrame &frame, SDL_Surface &outputSurface, RenderPerfCompositionStats &stats) override
 	{
+		(void)stats;
 		return OpenGlState().PrepareOutputSurfaceFrame(frame.composition, outputSurface);
 	}
 

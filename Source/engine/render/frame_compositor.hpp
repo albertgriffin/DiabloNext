@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -45,11 +46,60 @@ struct IndexBufferView {
 	int width = 0;
 	int height = 0;
 	int pitch = 0;
+	uint64_t version = 0;
 };
 
 struct DirtyRectList {
 	std::vector<Rectangle> rects;
 	bool fullFrame = false;
+};
+
+enum class CompositionAttachmentRole : uint8_t {
+	IndexedAlbedo,
+	Palette,
+	WorldIndex,
+	WorldMaterial,
+	WorldDepth,
+	WorldHeight,
+	WorldNormal,
+	WorldOccluder,
+	WorldReceiver,
+	LightAccumulation,
+	ShadowMask,
+	ParticleAccumulation,
+	InterfaceIndex,
+	CursorIndex,
+	Diagnostic,
+};
+
+enum class CompositionAttachmentFormat : uint8_t {
+	Unknown,
+	Index8,
+	PaletteRgba8,
+	Rgba8,
+	Alpha8,
+};
+
+struct CompositionAttachment {
+	CompositionAttachmentRole role = CompositionAttachmentRole::IndexedAlbedo;
+	CompositionAttachmentFormat format = CompositionAttachmentFormat::Unknown;
+	Size logicalSize;
+	int pitch = 0;
+	uint64_t version = 0;
+	DirtyRectList dirtyRects;
+	const uint8_t *cpuPixels = nullptr;
+};
+
+enum class CompositionAttachmentUploadAction : uint8_t {
+	Skip,
+	Full,
+	Partial,
+};
+
+struct CompositionAttachmentUploadPlan {
+	CompositionAttachmentUploadAction action = CompositionAttachmentUploadAction::Skip;
+	std::vector<Rectangle> rects;
+	uint64_t byteCount = 0;
 };
 
 enum class CompositionSurfaceRole : uint8_t {
@@ -83,6 +133,7 @@ struct CompositionFrame {
 	RenderLayerDiagnosticMode renderLayerDiagnosticMode = RenderLayerDiagnosticMode::Off;
 	RenderLayerMapView renderLayerMap;
 	CompositionSurfaceMetadata compositionSurfaceMetadata;
+	std::vector<CompositionAttachment> attachments;
 };
 
 enum class FrameCompositorBackendResult : uint8_t {
@@ -109,6 +160,10 @@ public:
 
 [[nodiscard]] IndexBufferView MakeIndexBufferView(const SDL_Surface &surface);
 [[nodiscard]] PaletteSnapshot MakePaletteSnapshot(const std::array<SDL_Color, 256> &palette, uint64_t version);
+[[nodiscard]] CompositionAttachment MakeIndexedAlbedoAttachment(IndexBufferView indexBuffer, Size logicalSize, const DirtyRectList &dirtyRects);
+[[nodiscard]] CompositionAttachment MakePaletteAttachment(const PaletteSnapshot &palette);
+[[nodiscard]] const CompositionAttachment *FindCompositionAttachment(std::span<const CompositionAttachment> attachments, CompositionAttachmentRole role);
+[[nodiscard]] CompositionAttachmentUploadPlan PlanCompositionAttachmentUpload(const CompositionAttachment &attachment, bool alreadyUploaded, uint64_t uploadedVersion);
 [[nodiscard]] std::unique_ptr<IFrameCompositorBackend> CreateCpuFrameCompositorBackend();
 
 class IFrameCompositor {

@@ -69,6 +69,24 @@ int ThreadCountOverrideForTesting = 0;
 	    || result == FrameCompositorBackendResult::RetainedDirectPresentation;
 }
 
+void RecordBackendResult(RenderPerfCompositionStats &stats, const FrameCompositorBackendResult result)
+{
+	switch (result) {
+	case FrameCompositorBackendResult::NoFrameProduced:
+		stats.backendNoFrameProducedCount++;
+		break;
+	case FrameCompositorBackendResult::UpdatedOutputSurface:
+		stats.backendUpdatedOutputSurfaceCount++;
+		break;
+	case FrameCompositorBackendResult::PreparedDirectPresentation:
+		stats.backendPreparedDirectPresentationCount++;
+		break;
+	case FrameCompositorBackendResult::RetainedDirectPresentation:
+		stats.backendRetainedDirectPresentationCount++;
+		break;
+	}
+}
+
 #if DEVILUTIONX_PARALLEL_COMPOSITION
 struct CompositionWorkerBand {
 	int yBegin = 0;
@@ -197,6 +215,32 @@ struct NormalizedDirtyRects {
 	if (size.width <= 0 || size.height <= 0)
 		return 0;
 	return static_cast<uint64_t>(size.width) * static_cast<uint64_t>(size.height);
+}
+
+[[nodiscard]] int CompositionAttachmentBytesPerPixel(const CompositionAttachmentFormat format)
+{
+	switch (format) {
+	case CompositionAttachmentFormat::Index8:
+	case CompositionAttachmentFormat::Alpha8:
+		return 1;
+	case CompositionAttachmentFormat::PaletteRgba8:
+	case CompositionAttachmentFormat::Rgba8:
+		return 4;
+	case CompositionAttachmentFormat::Unknown:
+		break;
+	}
+	return 0;
+}
+
+void UpsertCompositionAttachment(std::vector<CompositionAttachment> &attachments, CompositionAttachment attachment)
+{
+	for (CompositionAttachment &existing : attachments) {
+		if (existing.role == attachment.role) {
+			existing = std::move(attachment);
+			return;
+		}
+	}
+	attachments.push_back(std::move(attachment));
 }
 
 [[nodiscard]] size_t CompositionSurfaceRoleIndex(const CompositionSurfaceRole role)
@@ -734,6 +778,83 @@ PaletteSnapshot MakePaletteSnapshot(const std::array<SDL_Color, 256> &palette, c
 	return snapshot;
 }
 
+CompositionAttachment MakeIndexedAlbedoAttachment(const IndexBufferView indexBuffer, const Size logicalSize, const DirtyRectList &dirtyRects)
+{
+	return {
+		CompositionAttachmentRole::IndexedAlbedo,
+		CompositionAttachmentFormat::Index8,
+		logicalSize,
+		indexBuffer.pitch,
+		indexBuffer.version,
+		dirtyRects,
+		indexBuffer.pixels,
+	};
+}
+
+CompositionAttachment MakePaletteAttachment(const PaletteSnapshot &palette)
+{
+	return {
+		CompositionAttachmentRole::Palette,
+		CompositionAttachmentFormat::PaletteRgba8,
+		{ 256, 1 },
+		256 * 4,
+		palette.version,
+		{},
+		reinterpret_cast<const uint8_t *>(palette.colors.data()),
+	};
+}
+
+const CompositionAttachment *FindCompositionAttachment(const std::span<const CompositionAttachment> attachments, const CompositionAttachmentRole role)
+{
+	for (const CompositionAttachment &attachment : attachments) {
+		if (attachment.role == role)
+			return &attachment;
+	}
+	return nullptr;
+}
+
+CompositionAttachmentUploadPlan PlanCompositionAttachmentUpload(const CompositionAttachment &attachment, const bool alreadyUploaded, const uint64_t uploadedVersion)
+{
+	CompositionAttachmentUploadPlan plan;
+	const int bytesPerPixel = CompositionAttachmentBytesPerPixel(attachment.format);
+	if (attachment.cpuPixels == nullptr || attachment.logicalSize.width <= 0 || attachment.logicalSize.height <= 0 || attachment.pitch <= 0 || bytesPerPixel <= 0)
+		return plan;
+
+	const Rectangle fullRect { { 0, 0 }, attachment.logicalSize };
+	const auto addRect = [&](Rectangle rect) {
+		rect = ClipToBounds(rect, attachment.logicalSize);
+		if (IsEmpty(rect))
+			return;
+		plan.rects.push_back(rect);
+		plan.byteCount += Area(rect) * static_cast<uint64_t>(bytesPerPixel);
+	};
+
+	if (!alreadyUploaded || attachment.dirtyRects.fullFrame) {
+		plan.action = CompositionAttachmentUploadAction::Full;
+		addRect(fullRect);
+		return plan;
+	}
+
+	if (!attachment.dirtyRects.rects.empty()) {
+		for (const Rectangle &rect : attachment.dirtyRects.rects) {
+			addRect(rect);
+		}
+		if (!plan.rects.empty()) {
+			plan.action = plan.rects.size() == 1 && plan.rects[0].position.x == 0 && plan.rects[0].position.y == 0
+			        && plan.rects[0].size == attachment.logicalSize
+			    ? CompositionAttachmentUploadAction::Full
+			    : CompositionAttachmentUploadAction::Partial;
+		}
+		return plan;
+	}
+
+	if (attachment.version != uploadedVersion) {
+		plan.action = CompositionAttachmentUploadAction::Full;
+		addRect(fullRect);
+	}
+	return plan;
+}
+
 std::unique_ptr<IFrameCompositorBackend> CreateCpuFrameCompositorBackend()
 {
 	return std::make_unique<CpuPaletteCompositorBackend>();
@@ -971,17 +1092,22 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 		logicalSizeChangedSinceComposition_ = false;
 	};
 	const auto composeRects = [&](std::vector<Rectangle> rects) {
-		const FrameCompositorBackendResult result = ComposeRects({
-		                                                             logicalSize_,
-		                                                             indexBuffer_,
-		                                                             palette_,
-		                                                             frame.dirtyRects,
-		                                                             diagnosticTransformEnabled_,
-		                                                             renderLayerDiagnosticMode_,
-		                                                             renderLayerMap_,
-		                                                             compositionSurfaceMetadata_,
-		                                                         },
-		    rects);
+		CompositionFrame backendFrame {
+			logicalSize_,
+			indexBuffer_,
+			palette_,
+			frame.dirtyRects,
+			diagnosticTransformEnabled_,
+			renderLayerDiagnosticMode_,
+			renderLayerMap_,
+			compositionSurfaceMetadata_,
+			frame.attachments,
+		};
+		UpsertCompositionAttachment(backendFrame.attachments, MakeIndexedAlbedoAttachment(indexBuffer_, logicalSize_, frame.dirtyRects));
+		UpsertCompositionAttachment(backendFrame.attachments, MakePaletteAttachment(palette_));
+
+		const FrameCompositorBackendResult result = ComposeRects(backendFrame, rects);
+		RecordBackendResult(lastCompositionStats_, result);
 		if (result == FrameCompositorBackendResult::NoFrameProduced) {
 			return false;
 		}
@@ -1005,6 +1131,7 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 
 	if (noDirtyRects && backend_ != nullptr && backend_->CanRetainDirectPresentation()) {
 		lastBackendResult_ = FrameCompositorBackendResult::RetainedDirectPresentation;
+		RecordBackendResult(lastCompositionStats_, lastBackendResult_);
 		directPresentationPending_ = true;
 		lastComposedFrameUsedDirectPresentation_ = true;
 		markComposedFrame();
@@ -1026,16 +1153,20 @@ FrameCompositorBackendResult CpuPaletteCompositor::ComposeRects(const Compositio
 
 void CpuPaletteCompositor::Compose()
 {
-	Compose({
-	    logicalSize_,
-	    indexBuffer_,
-	    palette_,
-	    dirtyRects_,
-	    diagnosticTransformEnabled_,
-	    renderLayerDiagnosticMode_,
-	    renderLayerMap_,
-	    compositionSurfaceMetadata_,
-	});
+	CompositionFrame frame {
+		logicalSize_,
+		indexBuffer_,
+		palette_,
+		dirtyRects_,
+		diagnosticTransformEnabled_,
+		renderLayerDiagnosticMode_,
+		renderLayerMap_,
+		compositionSurfaceMetadata_,
+		{},
+	};
+	UpsertCompositionAttachment(frame.attachments, MakeIndexedAlbedoAttachment(indexBuffer_, logicalSize_, dirtyRects_));
+	UpsertCompositionAttachment(frame.attachments, MakePaletteAttachment(palette_));
+	Compose(frame);
 }
 
 void CpuPaletteCompositor::Present()
@@ -1090,6 +1221,7 @@ bool ComposeFrameToOutput(SDL_Surface *outputSurface)
 		    *GetOptions().Experimental.renderLayerDiagnosticMode,
 		    CurrentRenderLayerMapView(),
 		    FrameCompositor.GetCompositionSurfaceMetadata(),
+		    {},
 		});
 	}
 	const FrameCompositorBackendResult backendResult = FrameCompositor.GetLastBackendResult();
