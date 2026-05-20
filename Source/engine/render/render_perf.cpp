@@ -39,11 +39,15 @@ uint64_t NowUsOverride = 0;
 	if (NowUsOverrideEnabled)
 		return NowUsOverride;
 #endif
+#ifdef USE_SDL1
+	return static_cast<uint64_t>(SDL_GetTicks()) * 1000;
+#else
 	const uint64_t counter = SDL_GetPerformanceCounter();
 	const uint64_t frequency = SDL_GetPerformanceFrequency();
 	if (frequency == 0)
 		return 0;
 	return counter * 1000000 / frequency;
+#endif
 }
 
 [[nodiscard]] size_t PhaseIndex(const RenderPerfPhase phase)
