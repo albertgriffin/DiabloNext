@@ -27,6 +27,7 @@
 
 #include "appfat.h"
 #include "controls/controller_buttons.h"
+#include "engine/render/light_shadow_diagnostics.hpp"
 #include "engine/render/render_layer_diagnostics.hpp"
 #include "engine/size.hpp"
 #include "engine/sound_defs.hpp"
@@ -572,6 +573,8 @@ struct ExperimentalOptions : OptionCategoryBase {
 	OptionEntryBoolean renderFrameCompositorDiagnosticTransform;
 	/** @brief Visualize render layer ownership in the experimental frame compositor. */
 	OptionEntryEnum<RenderLayerDiagnosticMode> renderLayerDiagnosticMode;
+	/** @brief Enable development light/shadow diagnostics in the accelerated compositor. */
+	OptionEntryEnum<RenderLightShadowDiagnosticMode> renderLightShadowDiagnosticMode;
 	/** @brief Log renderer performance telemetry. */
 	OptionEntryBoolean renderPerformanceStats;
 };

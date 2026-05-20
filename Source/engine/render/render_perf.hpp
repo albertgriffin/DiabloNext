@@ -62,6 +62,7 @@ enum class CompositionFullFrameReason : uint8_t {
 	IndexBufferChanged,
 	LogicalSizeChanged,
 	DirectPresentationUnavailable,
+	LightShadowDiagnosticRequested,
 };
 
 enum class CompositionUploadFallbackReason : uint8_t {

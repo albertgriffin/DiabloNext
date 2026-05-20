@@ -17,6 +17,7 @@
 #include "engine/render/accelerated_palette_compositor.hpp"
 #include "engine/render/frame_compositor.hpp"
 #include "engine/render/render_layer.hpp"
+#include "options.h"
 #include "utils/sdl_wrap.h"
 
 namespace devilution {
@@ -58,6 +59,23 @@ public:
 	{
 		SetFrameCompositorThreadCountOverrideForTesting(0);
 	}
+};
+
+class RenderLightShadowDiagnosticModeGuard {
+public:
+	explicit RenderLightShadowDiagnosticModeGuard(const RenderLightShadowDiagnosticMode mode)
+	    : previousMode_(*GetOptions().Experimental.renderLightShadowDiagnosticMode)
+	{
+		GetOptions().Experimental.renderLightShadowDiagnosticMode.SetValue(mode);
+	}
+
+	~RenderLightShadowDiagnosticModeGuard()
+	{
+		GetOptions().Experimental.renderLightShadowDiagnosticMode.SetValue(previousMode_);
+	}
+
+private:
+	RenderLightShadowDiagnosticMode previousMode_;
 };
 
 class RecordingFrameCompositorBackend final : public IFrameCompositorBackend {
@@ -179,6 +197,7 @@ TEST(FrameCompositor, NeutralCompositionLightingInputsPrepareNoOpBuffers)
 	NeutralCompositionLightingInputs lightingInputs;
 	const CompositionLightingInputs *prepared = lightingInputs.Prepare({ 2, 2 });
 	ASSERT_NE(prepared, nullptr);
+	EXPECT_EQ(prepared->diagnosticMode, RenderLightShadowDiagnosticMode::Off);
 
 	EXPECT_TRUE(prepared->light.IsValid());
 	EXPECT_EQ(prepared->light.size.width, 2);
@@ -215,6 +234,56 @@ TEST(FrameCompositor, NeutralCompositionLightingInputsPrepareNoOpBuffers)
 
 	EXPECT_EQ(lightingInputs.Prepare({ 0, 1 }), nullptr);
 	EXPECT_EQ(lightingInputs.Get(), nullptr);
+}
+
+TEST(FrameCompositor, DevelopmentCompositionLightingInputsOffReturnsNull)
+{
+	DevelopmentCompositionLightingInputs lightingInputs;
+	EXPECT_EQ(lightingInputs.Prepare({ 16, 16 }, RenderLightShadowDiagnosticMode::Off), nullptr);
+	EXPECT_EQ(lightingInputs.Get(), nullptr);
+}
+
+TEST(FrameCompositor, DevelopmentCompositionLightingInputsProduceDeterministicFullFrameDiagnostics)
+{
+	DevelopmentCompositionLightingInputs firstInputs;
+	DevelopmentCompositionLightingInputs secondInputs;
+	const CompositionLightingInputs *first = firstInputs.Prepare({ 96, 64 }, RenderLightShadowDiagnosticMode::FinalLitOutput);
+	const CompositionLightingInputs *second = secondInputs.Prepare({ 96, 64 }, RenderLightShadowDiagnosticMode::FinalLitOutput);
+	ASSERT_NE(first, nullptr);
+	ASSERT_NE(second, nullptr);
+
+	EXPECT_EQ(first->diagnosticMode, RenderLightShadowDiagnosticMode::FinalLitOutput);
+	EXPECT_TRUE(first->light.dirtyRects.fullFrame);
+	EXPECT_TRUE(first->shadow.dirtyRects.fullFrame);
+	EXPECT_EQ(first->light.version, first->shadow.version);
+	EXPECT_EQ(first->light.size, Size(96, 64));
+	EXPECT_EQ(first->shadow.size, Size(96, 64));
+	EXPECT_EQ(std::memcmp(first->light.pixels, second->light.pixels, static_cast<size_t>(first->light.pitch) * first->light.size.height), 0);
+	EXPECT_EQ(std::memcmp(first->shadow.pixels, second->shadow.pixels, static_cast<size_t>(first->shadow.pitch) * first->shadow.size.height), 0);
+
+	bool hasNonNeutralLight = false;
+	for (int i = 0; i < first->light.pitch * first->light.size.height; i += 4) {
+		if (first->light.pixels[i] != 255 || first->light.pixels[i + 1] != 255 || first->light.pixels[i + 2] != 255) {
+			hasNonNeutralLight = true;
+			break;
+		}
+	}
+	bool hasShadow = false;
+	for (int i = 0; i < first->shadow.pitch * first->shadow.size.height; i++) {
+		if (first->shadow.pixels[i] != 0) {
+			hasShadow = true;
+			break;
+		}
+	}
+	EXPECT_TRUE(hasNonNeutralLight);
+	EXPECT_TRUE(hasShadow);
+
+	const uint64_t firstVersion = first->light.version;
+	const CompositionLightingInputs *advanced = firstInputs.Prepare({ 96, 64 }, RenderLightShadowDiagnosticMode::ShadowAlpha);
+	ASSERT_NE(advanced, nullptr);
+	EXPECT_EQ(advanced->diagnosticMode, RenderLightShadowDiagnosticMode::ShadowAlpha);
+	EXPECT_GT(advanced->light.version, firstVersion);
+	EXPECT_EQ(advanced->shadow.version, advanced->light.version);
 }
 
 TEST(FrameCompositor, PlansUnchangedAttachmentUploadAsSkip)
@@ -724,6 +793,42 @@ TEST(FrameCompositor, AcceleratedPaletteBackendForwardsLightingInputs)
 	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 1);
 	EXPECT_EQ(presenterPtr->observedIndexedFrame.indexBuffer.pixels, pixels);
 	EXPECT_EQ(presenterPtr->observedIndexedLighting, &lightingInputs);
+}
+
+TEST(FrameCompositor, AcceleratedPaletteBackendUsesDevelopmentLightingDiagnosticOption)
+{
+	RenderLightShadowDiagnosticModeGuard diagnosticMode(RenderLightShadowDiagnosticMode::LightRgb);
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 2, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+	pixels[1] = 1;
+	pixels[indexSurface->pitch] = 1;
+	pixels[indexSurface->pitch + 1] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 2, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto presenter = std::make_unique<RecordingAcceleratedPalettePresenter>();
+	RecordingAcceleratedPalettePresenter *presenterPtr = presenter.get();
+	std::unique_ptr<IFrameCompositorBackend> backend = CreateAcceleratedPaletteCompositorBackend(std::move(presenter));
+	ASSERT_NE(backend, nullptr);
+
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.BeginFrame({ 2, 2 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 42));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.SetFullFrameDirty();
+	compositor.Compose();
+
+	ASSERT_NE(presenterPtr->observedIndexedLighting, nullptr);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->diagnosticMode, RenderLightShadowDiagnosticMode::LightRgb);
+	EXPECT_TRUE(presenterPtr->observedIndexedLighting->light.dirtyRects.fullFrame);
+	EXPECT_TRUE(presenterPtr->observedIndexedLighting->shadow.dirtyRects.fullFrame);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.size, Size(2, 2));
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.size, Size(2, 2));
 }
 
 TEST(FrameCompositor, AcceleratedPaletteBackendUploadsCpuPixelsWhenIndexedUploadFails)

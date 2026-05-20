@@ -18,6 +18,7 @@
 #endif
 
 #include "engine/render/frame_compositor.hpp"
+#include "engine/render/light_shadow_diagnostics.hpp"
 
 namespace devilution {
 
@@ -43,6 +44,7 @@ struct CompositionLightingBufferView {
 struct CompositionLightingInputs {
 	CompositionLightingBufferView light;
 	CompositionLightingBufferView shadow;
+	RenderLightShadowDiagnosticMode diagnosticMode = RenderLightShadowDiagnosticMode::Off;
 };
 
 class NeutralCompositionLightingInputs {
@@ -55,6 +57,19 @@ private:
 	CompositionLightingInputs inputs_ {};
 	std::vector<uint8_t> lightPixels_;
 	std::vector<uint8_t> shadowPixels_;
+};
+
+class DevelopmentCompositionLightingInputs {
+public:
+	[[nodiscard]] const CompositionLightingInputs *Prepare(Size size, RenderLightShadowDiagnosticMode mode);
+	[[nodiscard]] const CompositionLightingInputs *Get() const;
+
+private:
+	Size size_ {};
+	CompositionLightingInputs inputs_ {};
+	std::vector<uint8_t> lightPixels_;
+	std::vector<uint8_t> shadowPixels_;
+	uint64_t version_ = 1;
 };
 
 struct AcceleratedPaletteFrame {
@@ -76,6 +91,7 @@ public:
 
 [[nodiscard]] bool AcceleratedPaletteFrameRequiresCpuPixels(const CompositionFrame &frame);
 [[nodiscard]] const CompositionLightingInputs *PrepareNeutralCompositionLightingInputs(Size size);
+[[nodiscard]] const CompositionLightingInputs *PrepareDevelopmentCompositionLightingInputs(Size size, RenderLightShadowDiagnosticMode mode);
 [[nodiscard]] std::unique_ptr<IFrameCompositorBackend> CreateAcceleratedPaletteCompositorBackend(std::unique_ptr<IAcceleratedPalettePresenter> presenter, const CompositionLightingInputs *lightingInputs = nullptr);
 
 } // namespace devilution

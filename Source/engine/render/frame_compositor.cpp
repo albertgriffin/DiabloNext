@@ -1040,6 +1040,8 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 	const bool diagnosticTransformChanged = hasComposedFrame_ && diagnosticTransformEnabled_ != lastComposedDiagnosticTransformEnabled_;
 	const bool renderLayerDiagnosticModeChanged = hasComposedFrame_ && renderLayerDiagnosticMode_ != lastRenderLayerDiagnosticMode_;
 	const bool renderLayerDiagnosticsRequested = renderLayerDiagnosticMode_ != RenderLayerDiagnosticMode::Off;
+	const bool lightShadowDiagnosticsRequested = *GetOptions().Experimental.renderLightShadowDiagnosticMode != RenderLightShadowDiagnosticMode::Off
+	    && *GetOptions().Experimental.renderFrameCompositorBackend == RenderFrameCompositorBackend::SdlGpuPalette;
 	const Size bounds {
 		std::min({ logicalSize_.width, indexBuffer_.width, outputSurface_ != nullptr ? outputSurface_->w : 0 }),
 		std::min({ logicalSize_.height, indexBuffer_.height, outputSurface_ != nullptr ? outputSurface_->h : 0 }),
@@ -1063,6 +1065,8 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 		fullFrameReason = CompositionFullFrameReason::RenderLayerDiagnosticModeChanged;
 	} else if (renderLayerDiagnosticsRequested) {
 		fullFrameReason = CompositionFullFrameReason::RenderLayerDiagnosticsRequested;
+	} else if (lightShadowDiagnosticsRequested) {
+		fullFrameReason = CompositionFullFrameReason::LightShadowDiagnosticRequested;
 	} else if (outputSurfaceChanged) {
 		fullFrameReason = CompositionFullFrameReason::OutputSurfaceChanged;
 	} else if (indexBufferChanged) {

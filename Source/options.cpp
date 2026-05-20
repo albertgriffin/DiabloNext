@@ -842,6 +842,13 @@ ExperimentalOptions::ExperimentalOptions()
               { RenderLayerDiagnosticMode::Outline, N_("Outline") },
               { RenderLayerDiagnosticMode::TintAndOutline, N_("Tint + Outline") },
           })
+    , renderLightShadowDiagnosticMode("Render Light/Shadow Diagnostic", OptionEntryFlags::None, N_("Render Light/Shadow Diagnostic"), N_("Show development light and shadow buffers in the accelerated compositor."), RenderLightShadowDiagnosticMode::Off,
+          {
+              { RenderLightShadowDiagnosticMode::Off, N_("Off") },
+              { RenderLightShadowDiagnosticMode::FinalLitOutput, N_("Final Lit Output") },
+              { RenderLightShadowDiagnosticMode::LightRgb, N_("Light RGB") },
+              { RenderLightShadowDiagnosticMode::ShadowAlpha, N_("Shadow Alpha") },
+          })
     , renderPerformanceStats("Render Performance Stats", OptionEntryFlags::None, N_("Render Performance Stats"), N_("Log renderer performance telemetry once per second."), false)
 {
 }
@@ -853,6 +860,7 @@ std::vector<OptionEntryBase *> ExperimentalOptions::GetEntries()
 		&renderFrameCompositorBackend,
 		&renderFrameCompositorDiagnosticTransform,
 		&renderLayerDiagnosticMode,
+		&renderLightShadowDiagnosticMode,
 		&renderPerformanceStats,
 	};
 }

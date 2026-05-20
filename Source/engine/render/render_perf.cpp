@@ -193,6 +193,8 @@ std::string_view CompositionFullFrameReasonName(const CompositionFullFrameReason
 		return "logical-size-changed";
 	case CompositionFullFrameReason::DirectPresentationUnavailable:
 		return "direct-presentation-unavailable";
+	case CompositionFullFrameReason::LightShadowDiagnosticRequested:
+		return "light-shadow-diagnostic-requested";
 	}
 	return "unknown";
 }

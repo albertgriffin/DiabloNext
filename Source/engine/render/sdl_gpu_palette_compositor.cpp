@@ -102,6 +102,25 @@ struct PaletteShaderAsset {
 	SDL_GPUShaderFormat format = SDL_GPU_SHADERFORMAT_INVALID;
 };
 
+struct PaletteShaderUniforms {
+	uint32_t diagnosticView = 0;
+	uint32_t padding[3] {};
+};
+
+[[nodiscard]] uint32_t PaletteShaderDiagnosticView(const RenderLightShadowDiagnosticMode mode)
+{
+	switch (mode) {
+	case RenderLightShadowDiagnosticMode::LightRgb:
+		return 1;
+	case RenderLightShadowDiagnosticMode::ShadowAlpha:
+		return 2;
+	case RenderLightShadowDiagnosticMode::Off:
+	case RenderLightShadowDiagnosticMode::FinalLitOutput:
+		break;
+	}
+	return 0;
+}
+
 [[nodiscard]] const char *ShaderFormatName(const SDL_GPUShaderFormat format)
 {
 	switch (format) {
@@ -295,6 +314,7 @@ public:
 		loggedIndexedDeferral_ = false;
 		loggedIndexedPresentation_ = false;
 		loggedLightingInputs_ = false;
+		loggedDiagnosticMode_ = RenderLightShadowDiagnosticMode::Off;
 		palettePipelineFailed_ = false;
 		indexTextureUploaded_ = false;
 		paletteTextureUploaded_ = false;
@@ -305,6 +325,7 @@ public:
 		uploadedLightVersion_ = 0;
 		uploadedShadowVersion_ = 0;
 		pendingMode_ = PendingMode::None;
+		pendingLightShadowDiagnosticMode_ = RenderLightShadowDiagnosticMode::Off;
 		palettePipelineFormat_ = SDL_GPU_TEXTUREFORMAT_INVALID;
 		paletteExpandedTextureWidth_ = 0;
 		paletteExpandedTextureHeight_ = 0;
@@ -343,8 +364,14 @@ public:
 			Log("SDL_GPU palette compositor using light/shadow shader inputs");
 			loggedLightingInputs_ = true;
 		}
+		const RenderLightShadowDiagnosticMode diagnosticMode = frame.lighting != nullptr ? frame.lighting->diagnosticMode : RenderLightShadowDiagnosticMode::Off;
+		if (diagnosticMode != RenderLightShadowDiagnosticMode::Off && loggedDiagnosticMode_ != diagnosticMode) {
+			Log("SDL_GPU palette compositor consuming light/shadow diagnostic: {}", RenderLightShadowDiagnosticModeName(diagnosticMode));
+			loggedDiagnosticMode_ = diagnosticMode;
+		}
 		pendingLogicalSize_ = composition.logicalSize;
 		pendingOutputSize_ = {};
+		pendingLightShadowDiagnosticMode_ = diagnosticMode;
 		pendingMode_ = PendingMode::IndexedPalette;
 		return true;
 	}
@@ -376,6 +403,7 @@ public:
 
 		pendingLogicalSize_ = frame.logicalSize.width > 0 && frame.logicalSize.height > 0 ? frame.logicalSize : Size { outputSurface.w, outputSurface.h };
 		pendingOutputSize_ = { outputSurface.w, outputSurface.h };
+		pendingLightShadowDiagnosticMode_ = RenderLightShadowDiagnosticMode::Off;
 		pendingMode_ = PendingMode::OutputSurface;
 		return true;
 	}
@@ -556,6 +584,11 @@ private:
 		SDL_SetGPUViewport(renderPass, &gpuViewport);
 		SDL_BindGPUGraphicsPipeline(renderPass, palettePipeline_);
 		SDL_BindGPUFragmentSamplers(renderPass, 0, samplers, 4);
+		const PaletteShaderUniforms uniforms {
+			PaletteShaderDiagnosticView(pendingLightShadowDiagnosticMode_),
+			{},
+		};
+		SDL_PushGPUFragmentUniformData(commandBuffer, 0, &uniforms, sizeof(uniforms));
 		SDL_DrawGPUPrimitives(renderPass, 6, 1, 0, 0);
 		SDL_EndGPURenderPass(renderPass);
 
@@ -687,7 +720,7 @@ private:
 		palettePipelineFailed_ = false;
 	}
 
-	[[nodiscard]] SDL_GPUShader *CreateShader(const PaletteShaderAsset &asset, const SDL_GPUShaderStage stage, const uint32_t samplerCount)
+	[[nodiscard]] SDL_GPUShader *CreateShader(const PaletteShaderAsset &asset, const SDL_GPUShaderStage stage, const uint32_t samplerCount, const uint32_t uniformBufferCount = 0)
 	{
 		if (asset.format == SDL_GPU_SHADERFORMAT_INVALID || asset.code == nullptr || asset.codeSize == 0 || asset.entrypoint == nullptr)
 			return nullptr;
@@ -701,7 +734,7 @@ private:
 			samplerCount,
 			0,
 			0,
-			0,
+			uniformBufferCount,
 			0,
 		};
 		SDL_GPUShader *shader = SDL_CreateGPUShader(device_, &createInfo);
@@ -737,7 +770,7 @@ private:
 			palettePipelineFailed_ = true;
 			return false;
 		}
-		SDL_GPUShader *fragmentShader = CreateShader(fragmentShaderAsset, SDL_GPU_SHADERSTAGE_FRAGMENT, 4);
+		SDL_GPUShader *fragmentShader = CreateShader(fragmentShaderAsset, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 1);
 		if (fragmentShader == nullptr) {
 			SDL_ReleaseGPUShader(device_, vertexShader);
 			palettePipelineFailed_ = true;
@@ -1377,6 +1410,7 @@ private:
 	bool loggedIndexedDeferral_ = false;
 	bool loggedIndexedPresentation_ = false;
 	bool loggedLightingInputs_ = false;
+	RenderLightShadowDiagnosticMode loggedDiagnosticMode_ = RenderLightShadowDiagnosticMode::Off;
 	bool palettePipelineFailed_ = false;
 	bool indexTextureUploaded_ = false;
 	bool paletteTextureUploaded_ = false;
@@ -1403,6 +1437,7 @@ private:
 	SDL_GPUPresentMode lastPresentMode_ = SDL_GPU_PRESENTMODE_VSYNC;
 	SDL_GPUTextureFormat palettePipelineFormat_ = SDL_GPU_TEXTUREFORMAT_INVALID;
 	PendingMode pendingMode_ = PendingMode::None;
+	RenderLightShadowDiagnosticMode pendingLightShadowDiagnosticMode_ = RenderLightShadowDiagnosticMode::Off;
 	Size pendingLogicalSize_ {};
 	Size pendingOutputSize_ {};
 	std::vector<uint8_t> outputRgba_;
