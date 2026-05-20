@@ -849,6 +849,14 @@ ExperimentalOptions::ExperimentalOptions()
               { RenderLightShadowDiagnosticMode::LightRgb, N_("Light RGB") },
               { RenderLightShadowDiagnosticMode::ShadowAlpha, N_("Shadow Alpha") },
           })
+    , renderWorldMaskDiagnosticMode("Render World Mask Diagnostic", OptionEntryFlags::None, N_("Render World Mask Diagnostic"), N_("Visualize world material, receiver, occluder, and emissive masks in the experimental frame compositor."), RenderWorldMaskDiagnosticMode::Off,
+          {
+              { RenderWorldMaskDiagnosticMode::Off, N_("Off") },
+              { RenderWorldMaskDiagnosticMode::Material, N_("Material") },
+              { RenderWorldMaskDiagnosticMode::Receiver, N_("Receiver") },
+              { RenderWorldMaskDiagnosticMode::Occluder, N_("Occluder") },
+              { RenderWorldMaskDiagnosticMode::Emissive, N_("Emissive") },
+          })
     , renderPerformanceStats("Render Performance Stats", OptionEntryFlags::None, N_("Render Performance Stats"), N_("Log renderer performance telemetry once per second."), false)
 {
 }
@@ -861,6 +869,7 @@ std::vector<OptionEntryBase *> ExperimentalOptions::GetEntries()
 		&renderFrameCompositorDiagnosticTransform,
 		&renderLayerDiagnosticMode,
 		&renderLightShadowDiagnosticMode,
+		&renderWorldMaskDiagnosticMode,
 		&renderPerformanceStats,
 	};
 }

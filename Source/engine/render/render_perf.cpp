@@ -112,6 +112,8 @@ void AccumulateFrame()
 	RollingStats.maxSelectedThreadCount = std::max(RollingStats.maxSelectedThreadCount, composition.selectedThreadCount);
 	RollingStats.layerStampedSpanCount += CurrentFrame.layerStampedSpanCount;
 	RollingStats.layerStampedPixelCount += CurrentFrame.layerStampedPixelCount;
+	RollingStats.worldMaskStampedSpanCount += CurrentFrame.worldMaskStampedSpanCount;
+	RollingStats.worldMaskStampedPixelCount += CurrentFrame.worldMaskStampedPixelCount;
 }
 
 void LogRollingStats()
@@ -120,7 +122,7 @@ void LogRollingStats()
 	if (frames == 0)
 		return;
 
-	Log("RenderPerf frames={} avg_us cursor_undraw={} world={} interface={} cursor={} debug={} dirty_blit={} compose={} present={} world_detail setup={} lightmap={} floor={} tiles={} oob={} zoom={} overlay={} debug={} view_ui={} layer_setup={} tile_detail cell={} missile={} corpse={} object={} item={} player={} monster={} special={} dirty_rects submitted={} normalized={} composed={} dirty_area submitted={} normalized={} composed={} full_frames={} last_full_reason={} parallel_frames={} max_threads={} upload bytes={} rects={} skipped={} full={} failed={} last_upload_fallback={} backend_results no_frame={} cpu_surface={} direct_prepared={} direct_retained={} role_rects world={} world_overlay={} interface={} cursor={} diagnostic={} role_area world={} world_overlay={} interface={} cursor={} diagnostic={} layer_spans={} layer_pixels={}",
+	Log("RenderPerf frames={} avg_us cursor_undraw={} world={} interface={} cursor={} debug={} dirty_blit={} compose={} present={} world_detail setup={} lightmap={} floor={} tiles={} oob={} zoom={} overlay={} debug={} view_ui={} layer_setup={} tile_detail cell={} missile={} corpse={} object={} item={} player={} monster={} special={} dirty_rects submitted={} normalized={} composed={} dirty_area submitted={} normalized={} composed={} full_frames={} last_full_reason={} parallel_frames={} max_threads={} upload bytes={} rects={} skipped={} full={} failed={} last_upload_fallback={} backend_results no_frame={} cpu_surface={} direct_prepared={} direct_retained={} role_rects world={} world_overlay={} interface={} cursor={} diagnostic={} role_area world={} world_overlay={} interface={} cursor={} diagnostic={} layer_spans={} layer_pixels={} world_mask_spans={} world_mask_pixels={}",
 	    frames,
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::CursorUndraw)], frames),
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::WorldDraw)], frames),
@@ -179,7 +181,9 @@ void LogRollingStats()
 	    Average(RollingStats.cursorRoleDirtyPixelArea, frames),
 	    Average(RollingStats.diagnosticOverlayRoleDirtyPixelArea, frames),
 	    Average(RollingStats.layerStampedSpanCount, frames),
-	    Average(RollingStats.layerStampedPixelCount, frames));
+	    Average(RollingStats.layerStampedPixelCount, frames),
+	    Average(RollingStats.worldMaskStampedSpanCount, frames),
+	    Average(RollingStats.worldMaskStampedPixelCount, frames));
 }
 
 } // namespace
@@ -215,6 +219,10 @@ std::string_view CompositionFullFrameReasonName(const CompositionFullFrameReason
 		return "direct-presentation-unavailable";
 	case CompositionFullFrameReason::LightShadowDiagnosticRequested:
 		return "light-shadow-diagnostic-requested";
+	case CompositionFullFrameReason::WorldMaskDiagnosticModeChanged:
+		return "world-mask-diagnostic-mode-changed";
+	case CompositionFullFrameReason::WorldMaskDiagnosticsRequested:
+		return "world-mask-diagnostics-requested";
 	}
 	return "unknown";
 }
@@ -310,6 +318,15 @@ void SetRenderPerfLayerCaptureStats(const uint64_t stampedSpanCount, const uint6
 
 	CurrentFrame.layerStampedSpanCount = stampedSpanCount;
 	CurrentFrame.layerStampedPixelCount = stampedPixelCount;
+}
+
+void SetRenderPerfWorldMaskStats(const uint64_t stampedSpanCount, const uint64_t stampedPixelCount)
+{
+	if (!Active)
+		return;
+
+	CurrentFrame.worldMaskStampedSpanCount = stampedSpanCount;
+	CurrentFrame.worldMaskStampedPixelCount = stampedPixelCount;
 }
 
 RenderPerfScope::RenderPerfScope(const RenderPerfPhase phase)

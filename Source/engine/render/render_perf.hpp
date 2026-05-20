@@ -63,6 +63,8 @@ enum class CompositionFullFrameReason : uint8_t {
 	LogicalSizeChanged,
 	DirectPresentationUnavailable,
 	LightShadowDiagnosticRequested,
+	WorldMaskDiagnosticModeChanged,
+	WorldMaskDiagnosticsRequested,
 };
 
 enum class CompositionUploadFallbackReason : uint8_t {
@@ -118,6 +120,8 @@ struct RenderPerfFrameStats {
 	RenderPerfCompositionStats composition;
 	uint64_t layerStampedSpanCount = 0;
 	uint64_t layerStampedPixelCount = 0;
+	uint64_t worldMaskStampedSpanCount = 0;
+	uint64_t worldMaskStampedPixelCount = 0;
 };
 
 struct RenderPerfRollingStats {
@@ -133,6 +137,8 @@ struct RenderPerfRollingStats {
 	uint64_t composedPixelArea = 0;
 	uint64_t layerStampedSpanCount = 0;
 	uint64_t layerStampedPixelCount = 0;
+	uint64_t worldMaskStampedSpanCount = 0;
+	uint64_t worldMaskStampedPixelCount = 0;
 	uint64_t uploadBytes = 0;
 	uint64_t uploadedRectCount = 0;
 	uint64_t skippedUploadCount = 0;
@@ -168,6 +174,7 @@ void EndRenderPerfFrame();
 void AddRenderPerfDuration(RenderPerfPhase phase, uint64_t durationUs);
 void SetRenderPerfCompositionStats(const RenderPerfCompositionStats &stats);
 void SetRenderPerfLayerCaptureStats(uint64_t stampedSpanCount, uint64_t stampedPixelCount);
+void SetRenderPerfWorldMaskStats(uint64_t stampedSpanCount, uint64_t stampedPixelCount);
 
 class RenderPerfScope {
 public:

@@ -19,6 +19,30 @@ uint8_t LayerAt(const int x, const int y)
 	return layerMap.pixels[static_cast<size_t>(y) * layerMap.pitch + x];
 }
 
+uint8_t WorldMaterialAt(const int x, const int y)
+{
+	const RenderWorldMaskMapView worldMaskMap = CurrentRenderWorldMaskMapView();
+	return worldMaskMap.materialPixels[static_cast<size_t>(y) * worldMaskMap.pitch + x];
+}
+
+uint8_t WorldReceiverAt(const int x, const int y)
+{
+	const RenderWorldMaskMapView worldMaskMap = CurrentRenderWorldMaskMapView();
+	return worldMaskMap.receiverPixels[static_cast<size_t>(y) * worldMaskMap.pitch + x];
+}
+
+uint8_t WorldOccluderAt(const int x, const int y)
+{
+	const RenderWorldMaskMapView worldMaskMap = CurrentRenderWorldMaskMapView();
+	return worldMaskMap.occluderPixels[static_cast<size_t>(y) * worldMaskMap.pitch + x];
+}
+
+uint8_t WorldEmissiveAt(const int x, const int y)
+{
+	const RenderWorldMaskMapView worldMaskMap = CurrentRenderWorldMaskMapView();
+	return worldMaskMap.emissivePixels[static_cast<size_t>(y) * worldMaskMap.pitch + x];
+}
+
 void BeginTestRenderLayerFrame(const Surface &out)
 {
 	ResetRenderLayerFrameStats();
@@ -190,6 +214,75 @@ TEST(RenderLayer, TracksLayerCaptureStampCost)
 	const RenderLayerFrameStats &stats = GetRenderLayerFrameStats();
 	EXPECT_EQ(stats.stampedSpanCount, 2);
 	EXPECT_EQ(stats.stampedPixelCount, 4);
+}
+
+TEST(RenderLayer, WorldMaskCaptureIsOptional)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	ResetRenderLayerFrameStats();
+	BeginRenderLayerFrame(out, true, false);
+
+	EXPECT_EQ(CurrentRenderWorldMaskMapView().materialPixels, nullptr);
+}
+
+TEST(RenderLayer, CapturesWorldMaskOwnershipForWorldPixels)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 3, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	ResetRenderLayerFrameStats();
+	BeginRenderLayerFrame(out, true, true);
+	{
+		RenderWorldMaskScope floorMask(RenderWorldMaterial::Floor, RenderWorldMaskReceiver);
+		out.SetPixel({ 0, 0 }, 1);
+		{
+			RenderWorldMaskScope actorMask(RenderWorldMaterial::Actor, RenderWorldMaskReceiver | RenderWorldMaskOccluder | RenderWorldMaskEmissive);
+			out.SetPixel({ 1, 0 }, 2);
+		}
+		out.SetPixel({ 2, 0 }, 3);
+	}
+
+	EXPECT_EQ(WorldMaterialAt(0, 0), static_cast<uint8_t>(RenderWorldMaterial::Floor));
+	EXPECT_EQ(WorldMaterialAt(1, 0), static_cast<uint8_t>(RenderWorldMaterial::Actor));
+	EXPECT_EQ(WorldMaterialAt(2, 0), static_cast<uint8_t>(RenderWorldMaterial::Floor));
+	EXPECT_EQ(WorldReceiverAt(0, 0), 255);
+	EXPECT_EQ(WorldReceiverAt(1, 0), 255);
+	EXPECT_EQ(WorldReceiverAt(2, 0), 255);
+	EXPECT_EQ(WorldOccluderAt(0, 0), 0);
+	EXPECT_EQ(WorldOccluderAt(1, 0), 255);
+	EXPECT_EQ(WorldOccluderAt(2, 0), 0);
+	EXPECT_EQ(WorldEmissiveAt(0, 0), 0);
+	EXPECT_EQ(WorldEmissiveAt(1, 0), 255);
+	EXPECT_EQ(WorldEmissiveAt(2, 0), 0);
+
+	const RenderLayerFrameStats &stats = GetRenderLayerFrameStats();
+	EXPECT_EQ(stats.worldMaskStampedSpanCount, 3);
+	EXPECT_EQ(stats.worldMaskStampedPixelCount, 3);
+}
+
+TEST(RenderLayer, NonWorldLayerWritesDoNotOverwriteWorldMaskOwnership)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	ResetRenderLayerFrameStats();
+	BeginRenderLayerFrame(out, true, true);
+	{
+		RenderWorldMaskScope floorMask(RenderWorldMaterial::Floor, RenderWorldMaskReceiver);
+		out.SetPixel({ 0, 0 }, 1);
+	}
+	{
+		RenderLayerScope interfaceLayer(RenderLayer::Interface);
+		RenderWorldMaskScope itemMask(RenderWorldMaterial::Item, RenderWorldMaskReceiver | RenderWorldMaskOccluder);
+		out.SetPixel({ 0, 0 }, 2);
+	}
+
+	EXPECT_EQ(LayerAt(0, 0), static_cast<uint8_t>(RenderLayer::Interface));
+	EXPECT_EQ(WorldMaterialAt(0, 0), static_cast<uint8_t>(RenderWorldMaterial::Floor));
+	EXPECT_EQ(WorldReceiverAt(0, 0), 255);
+	EXPECT_EQ(WorldOccluderAt(0, 0), 0);
 }
 
 TEST(RenderLayer, ClxOpaqueRunsStampLayer)

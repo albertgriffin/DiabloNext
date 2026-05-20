@@ -575,6 +575,8 @@ struct ExperimentalOptions : OptionCategoryBase {
 	OptionEntryEnum<RenderLayerDiagnosticMode> renderLayerDiagnosticMode;
 	/** @brief Enable development light/shadow diagnostics in the accelerated compositor. */
 	OptionEntryEnum<RenderLightShadowDiagnosticMode> renderLightShadowDiagnosticMode;
+	/** @brief Visualize world material, receiver, occluder, and emissive masks. */
+	OptionEntryEnum<RenderWorldMaskDiagnosticMode> renderWorldMaskDiagnosticMode;
 	/** @brief Log renderer performance telemetry. */
 	OptionEntryBoolean renderPerformanceStats;
 };

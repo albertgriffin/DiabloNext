@@ -26,11 +26,24 @@ struct CaptureBuffer {
 
 RenderLayerFrameStats FrameStats;
 std::vector<RenderLayer> LayerStack;
+struct WorldMaskState {
+	RenderWorldMaterial material = RenderWorldMaterial::Unknown;
+	uint8_t flags = 0;
+};
+std::vector<WorldMaskState> WorldMaskStack;
 bool CaptureEnabled = false;
+bool WorldMaskCaptureEnabled = false;
 int CaptureSuspensionDepth = 0;
 CaptureBuffer ActiveBuffer;
 CaptureBuffer LayerMapBuffer;
 std::vector<uint8_t> LayerMap;
+CaptureBuffer WorldMaskMapBuffer;
+std::vector<uint8_t> WorldMaterialMap;
+std::vector<uint8_t> WorldReceiverMap;
+std::vector<uint8_t> WorldOccluderMap;
+std::vector<uint8_t> WorldEmissiveMap;
+uint64_t NextWorldMaskVersion = 0;
+uint64_t CurrentWorldMaskVersion = 0;
 
 [[nodiscard]] size_t LayerIndex(const RenderLayer layer)
 {
@@ -84,6 +97,33 @@ void RefreshCaptureActive()
 void MarkLayerMapSpan(const size_t index, const int width)
 {
 	std::memset(LayerMap.data() + index, static_cast<uint8_t>(FrameStats.currentLayer), static_cast<size_t>(width));
+}
+
+[[nodiscard]] bool ShouldStampWorldMask()
+{
+	return WorldMaskCaptureEnabled
+	    && FrameStats.currentLayer == RenderLayer::World
+	    && WorldMaterialMap.size() == LayerMapSize()
+	    && WorldReceiverMap.size() == LayerMapSize()
+	    && WorldOccluderMap.size() == LayerMapSize()
+	    && WorldEmissiveMap.size() == LayerMapSize();
+}
+
+void MarkWorldMaskSpan(const size_t index, const int width)
+{
+	if (!ShouldStampWorldMask())
+		return;
+
+	const uint8_t material = static_cast<uint8_t>(CurrentRenderWorldMaterial());
+	const uint8_t receiver = (CurrentRenderWorldMaskFlags() & RenderWorldMaskReceiver) != 0 ? 255 : 0;
+	const uint8_t occluder = (CurrentRenderWorldMaskFlags() & RenderWorldMaskOccluder) != 0 ? 255 : 0;
+	const uint8_t emissive = (CurrentRenderWorldMaskFlags() & RenderWorldMaskEmissive) != 0 ? 255 : 0;
+	std::memset(WorldMaterialMap.data() + index, material, static_cast<size_t>(width));
+	std::memset(WorldReceiverMap.data() + index, receiver, static_cast<size_t>(width));
+	std::memset(WorldOccluderMap.data() + index, occluder, static_cast<size_t>(width));
+	std::memset(WorldEmissiveMap.data() + index, emissive, static_cast<size_t>(width));
+	FrameStats.worldMaskStampedSpanCount++;
+	FrameStats.worldMaskStampedPixelCount += static_cast<uint64_t>(width);
 }
 
 [[nodiscard]] bool TryGetLayerMapSpan(const uint8_t *dst, int width, size_t &index, int &clippedWidth)
@@ -152,6 +192,7 @@ void MarkRenderLayerSpanSlow(const uint8_t *dst, int width)
 	FrameStats.stampedSpanCount++;
 	FrameStats.stampedPixelCount += static_cast<uint64_t>(clippedWidth);
 	MarkLayerMapSpan(index, clippedWidth);
+	MarkWorldMaskSpan(index, clippedWidth);
 }
 
 void MarkRenderLayerPixelSlow(const Surface &surface, const Point position)
@@ -185,6 +226,20 @@ RenderLayer CurrentRenderLayer()
 	return FrameStats.currentLayer;
 }
 
+RenderWorldMaterial CurrentRenderWorldMaterial()
+{
+	if (WorldMaskStack.empty())
+		return RenderWorldMaterial::Unknown;
+	return WorldMaskStack.back().material;
+}
+
+uint8_t CurrentRenderWorldMaskFlags()
+{
+	if (WorldMaskStack.empty())
+		return 0;
+	return WorldMaskStack.back().flags;
+}
+
 const RenderLayerFrameStats &GetRenderLayerFrameStats()
 {
 	return FrameStats;
@@ -203,29 +258,61 @@ RenderLayerMapView CurrentRenderLayerMapView()
 	};
 }
 
+RenderWorldMaskMapView CurrentRenderWorldMaskMapView()
+{
+	if (!WorldMaskCaptureEnabled || WorldMaterialMap.empty())
+		return {};
+
+	return {
+		WorldMaterialMap.data(),
+		WorldReceiverMap.data(),
+		WorldOccluderMap.data(),
+		WorldEmissiveMap.data(),
+		ActiveBuffer.width,
+		ActiveBuffer.height,
+		ActiveBuffer.width,
+		CurrentWorldMaskVersion,
+	};
+}
+
 void ResetRenderLayerFrameStats()
 {
 	FrameStats = {};
 	LayerStack.clear();
+	WorldMaskStack.clear();
 	CaptureEnabled = false;
+	WorldMaskCaptureEnabled = false;
 	CaptureSuspensionDepth = 0;
 	RefreshCaptureActive();
 	ActiveBuffer = {};
 	LayerMapBuffer = {};
 	LayerMap.clear();
+	WorldMaskMapBuffer = {};
+	WorldMaterialMap.clear();
+	WorldReceiverMap.clear();
+	WorldOccluderMap.clear();
+	WorldEmissiveMap.clear();
+	CurrentWorldMaskVersion = 0;
 }
 
-void BeginRenderLayerFrame(const Surface &surface, const bool captureEnabled)
+void BeginRenderLayerFrame(const Surface &surface, const bool captureEnabled, const bool worldMaskCaptureEnabled)
 {
 	FrameStats = {};
 	LayerStack.clear();
+	WorldMaskStack.clear();
 	CaptureSuspensionDepth = 0;
-	CaptureEnabled = captureEnabled && surface.surface != nullptr && surface.w() > 0 && surface.h() > 0;
+	WorldMaskCaptureEnabled = worldMaskCaptureEnabled && surface.surface != nullptr && surface.w() > 0 && surface.h() > 0;
+	CaptureEnabled = (captureEnabled || WorldMaskCaptureEnabled) && surface.surface != nullptr && surface.w() > 0 && surface.h() > 0;
 	RefreshCaptureActive();
 	if (!CaptureEnabled) {
 		ActiveBuffer = {};
 		LayerMapBuffer = {};
 		LayerMap.clear();
+		WorldMaskMapBuffer = {};
+		WorldMaterialMap.clear();
+		WorldReceiverMap.clear();
+		WorldOccluderMap.clear();
+		WorldEmissiveMap.clear();
 		return;
 	}
 
@@ -241,6 +328,23 @@ void BeginRenderLayerFrame(const Surface &surface, const bool captureEnabled)
 	if (!SameCaptureBuffer(ActiveBuffer, LayerMapBuffer) || LayerMap.size() != layerMapSize) {
 		LayerMap.assign(layerMapSize, UnknownRenderLayerId);
 		LayerMapBuffer = ActiveBuffer;
+	}
+	if (!WorldMaskCaptureEnabled) {
+		WorldMaskMapBuffer = {};
+		WorldMaterialMap.clear();
+		WorldReceiverMap.clear();
+		WorldOccluderMap.clear();
+		WorldEmissiveMap.clear();
+		return;
+	}
+
+	CurrentWorldMaskVersion = ++NextWorldMaskVersion;
+	if (!SameCaptureBuffer(ActiveBuffer, WorldMaskMapBuffer) || WorldMaterialMap.size() != layerMapSize) {
+		WorldMaterialMap.assign(layerMapSize, UnknownRenderWorldMaterialId);
+		WorldReceiverMap.assign(layerMapSize, 0);
+		WorldOccluderMap.assign(layerMapSize, 0);
+		WorldEmissiveMap.assign(layerMapSize, 0);
+		WorldMaskMapBuffer = ActiveBuffer;
 	}
 }
 
@@ -267,6 +371,18 @@ void EndRenderLayer(const RenderLayer layer)
 
 	FrameStats.currentLayer = LayerStack.back();
 	LayerStack.pop_back();
+}
+
+void BeginRenderWorldMask(const RenderWorldMaterial material, const uint8_t flags)
+{
+	WorldMaskStack.push_back({ material, flags });
+}
+
+void EndRenderWorldMask(const RenderWorldMaterial material)
+{
+	assert(!WorldMaskStack.empty());
+	assert(WorldMaskStack.back().material == material);
+	WorldMaskStack.pop_back();
 }
 
 void RecordRenderLayerDirtyRect(const RenderLayer layer)
@@ -313,6 +429,17 @@ RenderLayerScope::RenderLayerScope(const RenderLayer layer, const Rectangle capt
 RenderLayerScope::~RenderLayerScope()
 {
 	EndRenderLayer(layer_);
+}
+
+RenderWorldMaskScope::RenderWorldMaskScope(const RenderWorldMaterial material, const uint8_t flags)
+    : material_(material)
+{
+	BeginRenderWorldMask(material_, flags);
+}
+
+RenderWorldMaskScope::~RenderWorldMaskScope()
+{
+	EndRenderWorldMask(material_);
 }
 
 RenderLayerCaptureSuspension::RenderLayerCaptureSuspension()

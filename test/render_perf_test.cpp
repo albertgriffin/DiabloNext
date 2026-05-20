@@ -104,6 +104,7 @@ TEST_F(RenderPerfTest, RecordsCompositionAndLayerCaptureStats)
 	composition.cursorRoleDirtyPixelArea = 4;
 	SetRenderPerfCompositionStats(composition);
 	SetRenderPerfLayerCaptureStats(4, 40);
+	SetRenderPerfWorldMaskStats(3, 30);
 
 	EndRenderPerfFrame();
 
@@ -112,6 +113,8 @@ TEST_F(RenderPerfTest, RecordsCompositionAndLayerCaptureStats)
 	EXPECT_EQ(frame.composition.fullFrameReason, CompositionFullFrameReason::PaletteChanged);
 	EXPECT_EQ(frame.layerStampedSpanCount, 4);
 	EXPECT_EQ(frame.layerStampedPixelCount, 40);
+	EXPECT_EQ(frame.worldMaskStampedSpanCount, 3);
+	EXPECT_EQ(frame.worldMaskStampedPixelCount, 30);
 
 	const RenderPerfRollingStats &rolling = GetRenderPerfRollingStats();
 	EXPECT_EQ(rolling.fullFrameCompositionCount, 1);
@@ -131,6 +134,8 @@ TEST_F(RenderPerfTest, RecordsCompositionAndLayerCaptureStats)
 	EXPECT_EQ(rolling.cursorRoleDirtyPixelArea, 4);
 	EXPECT_EQ(rolling.layerStampedSpanCount, 4);
 	EXPECT_EQ(rolling.layerStampedPixelCount, 40);
+	EXPECT_EQ(rolling.worldMaskStampedSpanCount, 3);
+	EXPECT_EQ(rolling.worldMaskStampedPixelCount, 30);
 }
 
 TEST_F(RenderPerfTest, ResetsRollingStatsAfterReportWindow)

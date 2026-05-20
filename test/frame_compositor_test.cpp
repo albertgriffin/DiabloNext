@@ -185,6 +185,13 @@ void ExpectWorldTint(const SDL_Surface &surface, const int x, const int y, const
 	EXPECT_EQ(color.b, baseColor.b / 2);
 }
 
+DirtyRectList FullFrameDirtyRectsForTest()
+{
+	DirtyRectList dirtyRects;
+	dirtyRects.fullFrame = true;
+	return dirtyRects;
+}
+
 TEST(FrameCompositor, AcceleratedCompositorApiNamesAreStable)
 {
 	EXPECT_EQ(AcceleratedCompositorApiName(AcceleratedCompositorApi::None), "none");
@@ -626,6 +633,71 @@ TEST(FrameCompositor, CpuPaletteCompositorAddsSharedIndexSurfaceRoleAttachments)
 	EXPECT_EQ(stats.cursorRoleDirtyPixelArea, 20);
 }
 
+TEST(FrameCompositor, CpuPaletteCompositorAddsWorldMaskAttachments)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+	pixels[1] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	std::array<uint8_t, 2> materialMap {
+		static_cast<uint8_t>(RenderWorldMaterial::Floor),
+		static_cast<uint8_t>(RenderWorldMaterial::Actor),
+	};
+	std::array<uint8_t, 2> receiverMap { 255, 0 };
+	std::array<uint8_t, 2> occluderMap { 0, 255 };
+	std::array<uint8_t, 2> emissiveMap { 0, 255 };
+	DirtyRectList dirtyRects;
+	dirtyRects.rects.push_back({ { 1, 0 }, { 1, 1 } });
+
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+	auto backend = std::make_unique<RecordingFrameCompositorBackend>();
+	RecordingFrameCompositorBackend *backendPtr = backend.get();
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.Compose({
+	    { 2, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 42),
+	    dirtyRects,
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    {},
+	    {},
+	    {},
+	    { materialMap.data(), receiverMap.data(), occluderMap.data(), emissiveMap.data(), 2, 1, 2, 77 },
+	    RenderWorldMaskDiagnosticMode::Off,
+	});
+
+	ASSERT_EQ(backendPtr->composeCallCount, 1);
+	const CompositionFrame &observedFrame = backendPtr->observedFrame;
+	const CompositionAttachment *material = FindCompositionAttachment(observedFrame.attachments, CompositionAttachmentRole::WorldMaterial);
+	const CompositionAttachment *receiver = FindCompositionAttachment(observedFrame.attachments, CompositionAttachmentRole::WorldReceiver);
+	const CompositionAttachment *occluder = FindCompositionAttachment(observedFrame.attachments, CompositionAttachmentRole::WorldOccluder);
+	ASSERT_NE(material, nullptr);
+	ASSERT_NE(receiver, nullptr);
+	ASSERT_NE(occluder, nullptr);
+	EXPECT_EQ(material->format, CompositionAttachmentFormat::Index8);
+	EXPECT_EQ(receiver->format, CompositionAttachmentFormat::Alpha8);
+	EXPECT_EQ(occluder->format, CompositionAttachmentFormat::Alpha8);
+	EXPECT_EQ(material->logicalSize, Size(2, 1));
+	EXPECT_EQ(material->pitch, 2);
+	EXPECT_EQ(material->version, 77);
+	EXPECT_EQ(receiver->version, 77);
+	EXPECT_EQ(occluder->version, 77);
+	EXPECT_EQ(material->cpuPixels, materialMap.data());
+	EXPECT_EQ(receiver->cpuPixels, receiverMap.data());
+	EXPECT_EQ(occluder->cpuPixels, occluderMap.data());
+	ASSERT_EQ(material->dirtyRects.rects.size(), 1);
+	EXPECT_EQ(material->dirtyRects.rects[0].position.x, 1);
+	EXPECT_EQ(receiver->dirtyRects.rects.size(), 1);
+	EXPECT_EQ(occluder->dirtyRects.rects.size(), 1);
+	EXPECT_EQ(backendPtr->observedFrame.worldMaskMap.emissivePixels, emissiveMap.data());
+}
+
 TEST(FrameCompositor, CpuPaletteCompositorReportsDirectPresentationFromBackend)
 {
 	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
@@ -833,6 +905,8 @@ TEST(FrameCompositor, AcceleratedPaletteBackendUsesIndexedPathWithLayerMapWhenDi
 	    { layerMap.data(), 1, 1, 1 },
 	    {},
 	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
 	});
 
 	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
@@ -877,6 +951,56 @@ TEST(FrameCompositor, AcceleratedPaletteBackendUsesCpuPixelsForDiagnostics)
 	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
 	EXPECT_NE(color.r, palette[1].r);
 	EXPECT_NE(color.b, palette[1].b);
+}
+
+TEST(FrameCompositor, AcceleratedPaletteBackendUsesCpuPixelsForWorldMaskDiagnostics)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	std::array<uint8_t, 1> materialMap { static_cast<uint8_t>(RenderWorldMaterial::Actor) };
+	std::array<uint8_t, 1> receiverMap { 255 };
+	std::array<uint8_t, 1> occluderMap { 255 };
+	std::array<uint8_t, 1> emissiveMap { 255 };
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto presenter = std::make_unique<RecordingAcceleratedPalettePresenter>();
+	RecordingAcceleratedPalettePresenter *presenterPtr = presenter.get();
+	std::unique_ptr<IFrameCompositorBackend> backend = CreateAcceleratedPaletteCompositorBackend(std::move(presenter));
+	ASSERT_NE(backend, nullptr);
+
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.Compose({
+	    { 1, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 42),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    {},
+	    {},
+	    {},
+	    { materialMap.data(), receiverMap.data(), occluderMap.data(), emissiveMap.data(), 1, 1, 1, 7 },
+	    RenderWorldMaskDiagnosticMode::Material,
+	});
+
+	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
+	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 0);
+	EXPECT_EQ(presenterPtr->outputSurfaceFrameCallCount, 1);
+	EXPECT_EQ(presenterPtr->observedOutputSurface, outputSurface.get());
+	EXPECT_EQ(presenterPtr->observedOutputFrame.renderWorldMaskDiagnosticMode, RenderWorldMaskDiagnosticMode::Material);
+	EXPECT_EQ(presenterPtr->observedOutputFrame.worldMaskMap.materialPixels, materialMap.data());
+	EXPECT_EQ(presenterPtr->observedOutputLighting, nullptr);
+
+	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(color.r, 255);
+	EXPECT_EQ(color.g, 64);
+	EXPECT_EQ(color.b, 220);
 }
 
 TEST(FrameCompositor, AcceleratedPaletteBackendForwardsLightingInputs)
@@ -995,6 +1119,8 @@ TEST(FrameCompositor, AcceleratedPaletteBackendLightingDiagnosticUsesLayerMapIso
 	    { layerMap.data(), 4, 1, 4 },
 	    {},
 	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
 	});
 
 	ASSERT_NE(presenterPtr->observedIndexedLighting, nullptr);
@@ -1389,12 +1515,147 @@ TEST(FrameCompositor, RenderLayerDiagnosticOffKeepsPaletteExactOutput)
 	    { layerMap.data(), 1, 1, 1 },
 	    {},
 	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
 	});
 
 	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
 	EXPECT_EQ(color.r, 20);
 	EXPECT_EQ(color.g, 40);
 	EXPECT_EQ(color.b, 60);
+}
+
+TEST(FrameCompositor, RenderWorldMaskDiagnosticOffKeepsPaletteExactOutput)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 20, 40, 60, 255 };
+
+	std::array<uint8_t, 1> materialMap { static_cast<uint8_t>(RenderWorldMaterial::Actor) };
+	std::array<uint8_t, 1> receiverMap { 255 };
+	std::array<uint8_t, 1> occluderMap { 255 };
+	std::array<uint8_t, 1> emissiveMap { 255 };
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	CpuPaletteCompositor compositor;
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.Compose({
+	    { 1, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 1),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    {},
+	    {},
+	    {},
+	    { materialMap.data(), receiverMap.data(), occluderMap.data(), emissiveMap.data(), 1, 1, 1, 9 },
+	    RenderWorldMaskDiagnosticMode::Off,
+	});
+
+	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(color.r, 20);
+	EXPECT_EQ(color.g, 40);
+	EXPECT_EQ(color.b, 60);
+}
+
+TEST(FrameCompositor, RenderWorldMaskDiagnosticMaterialIsWorldOnly)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+	pixels[1] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 20, 40, 60, 255 };
+
+	std::array<uint8_t, 2> layerMap {
+		static_cast<uint8_t>(RenderLayer::World),
+		static_cast<uint8_t>(RenderLayer::Interface),
+	};
+	std::array<uint8_t, 2> materialMap {
+		static_cast<uint8_t>(RenderWorldMaterial::Floor),
+		static_cast<uint8_t>(RenderWorldMaterial::Actor),
+	};
+	std::array<uint8_t, 2> receiverMap { 0, 0 };
+	std::array<uint8_t, 2> occluderMap { 0, 0 };
+	std::array<uint8_t, 2> emissiveMap { 0, 0 };
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	CpuPaletteCompositor compositor;
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.Compose({
+	    { 2, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 1),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    { layerMap.data(), 2, 1, 2 },
+	    {},
+	    {},
+	    { materialMap.data(), receiverMap.data(), occluderMap.data(), emissiveMap.data(), 2, 1, 2, 9 },
+	    RenderWorldMaskDiagnosticMode::Material,
+	});
+
+	const SDL_Color world = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(world.r, 48);
+	EXPECT_EQ(world.g, 180);
+	EXPECT_EQ(world.b, 80);
+
+	const SDL_Color interface = ReadColor(*outputSurface, 1, 0);
+	EXPECT_EQ(interface.r, 20);
+	EXPECT_EQ(interface.g, 40);
+	EXPECT_EQ(interface.b, 60);
+}
+
+TEST(FrameCompositor, RenderWorldMaskDiagnosticReceiverUsesMaskValues)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+	pixels[1] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 20, 40, 60, 255 };
+
+	std::array<uint8_t, 2> materialMap {
+		static_cast<uint8_t>(RenderWorldMaterial::Floor),
+		static_cast<uint8_t>(RenderWorldMaterial::Floor),
+	};
+	std::array<uint8_t, 2> receiverMap { 255, 0 };
+	std::array<uint8_t, 2> occluderMap { 0, 0 };
+	std::array<uint8_t, 2> emissiveMap { 0, 0 };
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	CpuPaletteCompositor compositor;
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.Compose({
+	    { 2, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 1),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    {},
+	    {},
+	    {},
+	    { materialMap.data(), receiverMap.data(), occluderMap.data(), emissiveMap.data(), 2, 1, 2, 9 },
+	    RenderWorldMaskDiagnosticMode::Receiver,
+	});
+
+	const SDL_Color receiver = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(receiver.r, 64);
+	EXPECT_EQ(receiver.g, 255);
+	EXPECT_EQ(receiver.b, 96);
+
+	const SDL_Color nonReceiver = ReadColor(*outputSurface, 1, 0);
+	EXPECT_EQ(nonReceiver.r, 32);
+	EXPECT_EQ(nonReceiver.g, 32);
+	EXPECT_EQ(nonReceiver.b, 32);
 }
 
 TEST(FrameCompositor, RenderLayerDiagnosticTintBlendsLayerColor)
@@ -1421,6 +1682,8 @@ TEST(FrameCompositor, RenderLayerDiagnosticTintBlendsLayerColor)
 	    { layerMap.data(), 1, 1, 1 },
 	    {},
 	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
 	});
 
 	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
@@ -1457,6 +1720,8 @@ TEST(FrameCompositor, RenderLayerDiagnosticOutlineMarksLayerBoundaries)
 	    { layerMap.data(), 2, 1, 2 },
 	    {},
 	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
 	});
 
 	const SDL_Color worldBoundary = ReadColor(*outputSurface, 0, 0);
@@ -1500,6 +1765,8 @@ TEST(FrameCompositor, RenderLayerDiagnosticTintAndOutlineCombinesEffects)
 	    { layerMap.data(), 3, 1, 3 },
 	    {},
 	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
 	});
 
 	const SDL_Color worldBoundary = ReadColor(*outputSurface, 0, 0);
@@ -1538,6 +1805,8 @@ TEST(FrameCompositor, RenderLayerDiagnosticRecomposesFullFrameWithoutDirtyRects)
 		{ layerMap.data(), 1, 1, 1 },
 		{},
 		{},
+		{},
+		RenderWorldMaskDiagnosticMode::Off,
 	};
 	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
 
@@ -1593,6 +1862,8 @@ TEST(FrameCompositor, CpuPaletteCompositorComposesLargeDiagnosticFrameAcrossRowB
 	    { layerMap.data(), Width, Height, Width },
 	    {},
 	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
 	});
 
 	ExpectWorldTint(*outputSurface, 0, 0, palette[1]);

@@ -322,7 +322,8 @@ const CompositionLightingInputs *DevelopmentCompositionLightingInputs::Get() con
 bool AcceleratedPaletteFrameRequiresCpuPixels(const CompositionFrame &frame)
 {
 	return frame.diagnosticTransform
-	    || frame.renderLayerDiagnosticMode != RenderLayerDiagnosticMode::Off;
+	    || frame.renderLayerDiagnosticMode != RenderLayerDiagnosticMode::Off
+	    || frame.renderWorldMaskDiagnosticMode != RenderWorldMaskDiagnosticMode::Off;
 }
 
 const CompositionLightingInputs *PrepareNeutralCompositionLightingInputs(const Size size)

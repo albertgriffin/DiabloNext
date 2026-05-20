@@ -38,16 +38,23 @@ struct RenderLayerFrameStats {
 	RenderLayer currentLayer = RenderLayer::World;
 	uint64_t stampedSpanCount = 0;
 	uint64_t stampedPixelCount = 0;
+	uint64_t worldMaskStampedSpanCount = 0;
+	uint64_t worldMaskStampedPixelCount = 0;
 };
 
 [[nodiscard]] RenderLayer CurrentRenderLayer();
+[[nodiscard]] RenderWorldMaterial CurrentRenderWorldMaterial();
+[[nodiscard]] uint8_t CurrentRenderWorldMaskFlags();
 [[nodiscard]] const RenderLayerFrameStats &GetRenderLayerFrameStats();
 [[nodiscard]] RenderLayerMapView CurrentRenderLayerMapView();
+[[nodiscard]] RenderWorldMaskMapView CurrentRenderWorldMaskMapView();
 void ResetRenderLayerFrameStats();
-void BeginRenderLayerFrame(const Surface &surface, bool captureEnabled);
+void BeginRenderLayerFrame(const Surface &surface, bool captureEnabled, bool worldMaskCaptureEnabled = false);
 void BeginRenderLayer(RenderLayer layer);
 void BeginRenderLayer(RenderLayer layer, Rectangle captureBounds);
 void EndRenderLayer(RenderLayer layer);
+void BeginRenderWorldMask(RenderWorldMaterial material, uint8_t flags);
+void EndRenderWorldMask(RenderWorldMaterial material);
 void RecordRenderLayerDirtyRect(RenderLayer layer);
 [[nodiscard]] bool SaveRenderLayerMapRegion(Rectangle rect, uint8_t *destination, int destinationPitch);
 bool RestoreRenderLayerMapRegion(Rectangle rect, const uint8_t *source, int sourcePitch);
@@ -94,6 +101,18 @@ public:
 
 private:
 	RenderLayer layer_;
+};
+
+class RenderWorldMaskScope {
+public:
+	explicit RenderWorldMaskScope(RenderWorldMaterial material, uint8_t flags = 0);
+	~RenderWorldMaskScope();
+
+	RenderWorldMaskScope(const RenderWorldMaskScope &) = delete;
+	RenderWorldMaskScope &operator=(const RenderWorldMaskScope &) = delete;
+
+private:
+	RenderWorldMaterial material_;
 };
 
 class RenderLayerCaptureSuspension {

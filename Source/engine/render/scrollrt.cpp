@@ -119,8 +119,21 @@ constexpr auto RightFrameDisplacement = Displacement { DunFrameWidth, 0 };
 		return false;
 	if (*GetOptions().Experimental.renderLayerDiagnosticMode != RenderLayerDiagnosticMode::Off)
 		return true;
+	if (*GetOptions().Experimental.renderWorldMaskDiagnosticMode != RenderWorldMaskDiagnosticMode::Off)
+		return true;
 	return *GetOptions().Experimental.renderFrameCompositorBackend == RenderFrameCompositorBackend::SdlGpuPalette
 	    && *GetOptions().Experimental.renderLightShadowDiagnosticMode != RenderLightShadowDiagnosticMode::Off;
+}
+
+[[nodiscard]] bool RenderWorldMaskCaptureNeededForFrameComposition()
+{
+	return *GetOptions().Experimental.renderFrameCompositor
+	    && *GetOptions().Experimental.renderWorldMaskDiagnosticMode != RenderWorldMaskDiagnosticMode::Off;
+}
+
+[[nodiscard]] uint8_t ReceiverOccluder()
+{
+	return RenderWorldMaskReceiver | RenderWorldMaskOccluder;
 }
 
 [[nodiscard]] DVL_ALWAYS_INLINE bool IsFloor(Point tilePosition)
@@ -131,6 +144,22 @@ constexpr auto RightFrameDisplacement = Displacement { DunFrameWidth, 0 };
 [[nodiscard]] DVL_ALWAYS_INLINE bool IsWall(Point tilePosition)
 {
 	return !IsFloor(tilePosition) || dSpecial[tilePosition.x][tilePosition.y] != 0;
+}
+
+[[nodiscard]] RenderWorldMaterial TileMaterial(TileType tileType, bool leftHalf)
+{
+	switch (tileType) {
+	case TileType::LeftTriangle:
+	case TileType::LeftTrapezoid:
+		return RenderWorldMaterial::LeftWall;
+	case TileType::RightTriangle:
+	case TileType::RightTrapezoid:
+		return RenderWorldMaterial::RightWall;
+	case TileType::Square:
+	case TileType::TransparentSquare:
+		return leftHalf ? RenderWorldMaterial::LeftWall : RenderWorldMaterial::RightWall;
+	}
+	return RenderWorldMaterial::DoorArchBlocker;
 }
 
 /**
@@ -360,6 +389,7 @@ void DrawMissilePrivate(const Surface &out, const Missile &missile, Point target
 
 	const Point missileRenderPosition { targetBufferPosition + missile.position.offsetForRendering - Displacement { missile._miAnimWidth2, 0 } };
 	const ClxSprite sprite = (*missile._miAnimData)[missile._miAnimFrame - 1];
+	RenderWorldMaskScope worldMask(RenderWorldMaterial::Missile, RenderWorldMaskEmissive);
 	if (missile._miUniqTrans != 0) {
 		ClxDrawTRN(out, missileRenderPosition, sprite, Monsters[missile._misource].uniqueMonsterTRN.get());
 	} else if (missile._miLightFlag) {
@@ -400,6 +430,7 @@ void DrawMonster(const Surface &out, Point tilePosition, Point targetBufferPosit
 	}
 
 	const ClxSprite sprite = monster.animInfo.currentSprite();
+	RenderWorldMaskScope worldMask(RenderWorldMaterial::Actor, ReceiverOccluder());
 
 	if (!IsTileLit(tilePosition)) {
 		ClxDrawTRN(out, targetBufferPosition, sprite, GetInfravisionTRN());
@@ -431,6 +462,7 @@ void DrawPlayerIconHelper(const Surface &out, MissileGraphicID missileGraphicId,
 	position.x -= GetMissileSpriteData(missileGraphicId).animWidth2;
 
 	const ClxSprite sprite = (*GetMissileSpriteData(missileGraphicId).sprites).list()[0];
+	RenderWorldMaskScope worldMask(RenderWorldMaterial::Missile, RenderWorldMaskEmissive);
 
 	if (!lighting) {
 		ClxDraw(out, position, sprite);
@@ -490,6 +522,7 @@ void DrawPlayer(const Surface &out, const Player &player, Point tilePosition, Po
 
 	const ClxSprite sprite = player.currentSprite();
 	const Point spriteBufferPosition = targetBufferPosition + player.getRenderingOffset(sprite);
+	RenderWorldMaskScope worldMask(RenderWorldMaterial::Actor, ReceiverOccluder());
 
 	if (&player == PlayerUnderCursor)
 		ClxDrawOutlineSkipColorZero(out, GetPlayerOutlineColor(player.getId()), spriteBufferPosition, sprite);
@@ -543,6 +576,7 @@ void DrawObject(const Surface &out, const Object &objectToDraw, Point tilePositi
 	const ClxSprite sprite = objectToDraw.currentSprite();
 
 	const Point screenPosition = targetBufferPosition + objectToDraw.getRenderingOffset(sprite, tilePosition);
+	RenderWorldMaskScope worldMask(RenderWorldMaterial::Object, ReceiverOccluder());
 
 	if (&objectToDraw == ObjectUnderCursor) {
 		ClxDrawOutlineSkipColorZero(out, OutlineColorsObject, screenPosition, sprite);
@@ -629,9 +663,11 @@ void DrawCell(const Surface &out, Point tilePosition, Point targetBufferPosition
 		const TileType tileType = levelCelBlock.type();
 		if (!isFloor || tileType == TileType::TransparentSquare) {
 			if (isFloor && tileType == TileType::TransparentSquare) {
+				RenderWorldMaskScope worldMask(RenderWorldMaterial::Floor, RenderWorldMaskReceiver);
 				RenderTileFoliage(out, targetBufferPosition,
 				    pDungeonCels.get(), levelCelBlock, foliageTbl);
 			} else {
+				RenderWorldMaskScope worldMask(TileMaterial(tileType, true), ReceiverOccluder());
 				RenderTile(out, targetBufferPosition,
 				    pDungeonCels.get(), levelCelBlock, getFirstTileMaskLeft(tileType), tbl);
 			}
@@ -641,9 +677,11 @@ void DrawCell(const Surface &out, Point tilePosition, Point targetBufferPosition
 		const TileType tileType = levelCelBlock.type();
 		if (!isFloor || tileType == TileType::TransparentSquare) {
 			if (isFloor && tileType == TileType::TransparentSquare) {
+				RenderWorldMaskScope worldMask(RenderWorldMaterial::Floor, RenderWorldMaskReceiver);
 				RenderTileFoliage(out, targetBufferPosition + RightFrameDisplacement,
 				    pDungeonCels.get(), levelCelBlock, foliageTbl);
 			} else {
+				RenderWorldMaskScope worldMask(TileMaterial(tileType, false), ReceiverOccluder());
 				RenderTile(out, targetBufferPosition + RightFrameDisplacement,
 				    pDungeonCels.get(), levelCelBlock, getFirstTileMaskRight(tileType), tbl);
 			}
@@ -655,6 +693,7 @@ void DrawCell(const Surface &out, Point tilePosition, Point targetBufferPosition
 		{
 			const LevelCelBlock levelCelBlock { pMap->mt[i] };
 			if (levelCelBlock.hasValue()) {
+				RenderWorldMaskScope worldMask(TileMaterial(levelCelBlock.type(), true), ReceiverOccluder());
 				RenderTile(out, targetBufferPosition,
 				    pDungeonCels.get(), levelCelBlock,
 				    transparency ? MaskType::Transparent : MaskType::Solid, foliageTbl);
@@ -663,6 +702,7 @@ void DrawCell(const Surface &out, Point tilePosition, Point targetBufferPosition
 		{
 			const LevelCelBlock levelCelBlock { pMap->mt[i + 1] };
 			if (levelCelBlock.hasValue()) {
+				RenderWorldMaskScope worldMask(TileMaterial(levelCelBlock.type(), false), ReceiverOccluder());
 				RenderTile(out, targetBufferPosition + RightFrameDisplacement,
 				    pDungeonCels.get(), levelCelBlock,
 				    transparency ? MaskType::Transparent : MaskType::Solid, foliageTbl);
@@ -702,6 +742,7 @@ void DrawFloorTile(const Surface &out, Point tilePosition, Point targetBufferPos
 	{
 		const LevelCelBlock levelCelBlock { DPieceMicros[levelPieceId].mt[0] };
 		if (levelCelBlock.hasValue()) {
+			RenderWorldMaskScope worldMask(RenderWorldMaterial::Floor, RenderWorldMaskReceiver);
 			RenderTileFrame(out, targetBufferPosition, TileType::LeftTriangle,
 			    GetDunFrame(pDungeonCels.get(), levelCelBlock.frame()), DunFrameTriangleHeight, MaskType::Solid, tbl);
 		}
@@ -709,6 +750,7 @@ void DrawFloorTile(const Surface &out, Point tilePosition, Point targetBufferPos
 	{
 		const LevelCelBlock levelCelBlock { DPieceMicros[levelPieceId].mt[1] };
 		if (levelCelBlock.hasValue()) {
+			RenderWorldMaskScope worldMask(RenderWorldMaterial::Floor, RenderWorldMaskReceiver);
 			RenderTileFrame(out, targetBufferPosition + RightFrameDisplacement, TileType::RightTriangle,
 			    GetDunFrame(pDungeonCels.get(), levelCelBlock.frame()), DunFrameTriangleHeight, MaskType::Solid, tbl);
 		}
@@ -727,6 +769,7 @@ void DrawItem(const Surface &out, int8_t itemIndex, Point targetBufferPosition, 
 	const Item &item = Items[itemIndex];
 	const ClxSprite sprite = item.AnimInfo.currentSprite();
 	const Point position = targetBufferPosition + item.getRenderingOffset(sprite);
+	RenderWorldMaskScope worldMask(RenderWorldMaterial::Item, RenderWorldMaskReceiver);
 	if (!IsPlayerInStore() && (itemIndex == pcursitem || AutoMapShowItems)) {
 		ClxDrawOutlineSkipColorZero(out, GetOutlineColor(item, false), position, sprite);
 	}
@@ -818,6 +861,7 @@ void DrawDungeon(const Surface &out, Point tilePosition, Point targetBufferPosit
 		const Corpse &corpse = Corpses[(bDead & 0x1F) - 1];
 		const Point position { targetBufferPosition.x - CalculateSpriteTileCenterX(corpse.width), targetBufferPosition.y };
 		const ClxSprite sprite = corpse.spritesForDirection(static_cast<Direction>((bDead >> 5) & 7))[corpse.frame];
+		RenderWorldMaskScope worldMask(RenderWorldMaterial::Corpse, RenderWorldMaskReceiver);
 		if (corpse.translationPaletteIndex != 0) {
 			const uint8_t *trn = Monsters[corpse.translationPaletteIndex - 1].uniqueMonsterTRN.get();
 			ClxDrawTRN(out, position, sprite, trn);
@@ -949,8 +993,10 @@ void DrawDungeon(const Surface &out, Point tilePosition, Point targetBufferPosit
 			transparency = transparency && (SDL_GetModState() & SDL_KMOD_ALT) == 0;
 #endif
 			if (transparency) {
+				RenderWorldMaskScope worldMask(RenderWorldMaterial::DoorArchBlocker, ReceiverOccluder());
 				ClxDrawLightBlended(out, targetBufferPosition, (*pSpecialCels)[bArch], lightTableIndex);
 			} else {
+				RenderWorldMaskScope worldMask(RenderWorldMaterial::DoorArchBlocker, ReceiverOccluder());
 				ClxDrawLight(out, targetBufferPosition, (*pSpecialCels)[bArch], lightTableIndex);
 			}
 		}
@@ -962,6 +1008,7 @@ void DrawDungeon(const Surface &out, Point tilePosition, Point targetBufferPosit
 			const int8_t bArch = dSpecial[tilePosition.x - 1][tilePosition.y - 1] - 1;
 			if (bArch >= 0) {
 				RenderPerfScope renderPerfScope(RenderPerfPhase::WorldTileSpecial, renderPerfActive);
+				RenderWorldMaskScope worldMask(RenderWorldMaterial::DoorArchBlocker, ReceiverOccluder());
 				ClxDraw(out, targetBufferPosition + Displacement { 0, -TILE_HEIGHT }, (*pSpecialCels)[bArch]);
 			}
 		}
@@ -1900,7 +1947,7 @@ void scrollrt_draw_game_screen()
 	const Surface &out = GlobalBackBuffer();
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::LayerCaptureSetup);
-		BeginRenderLayerFrame(out, RenderLayerCaptureNeededForFrameComposition());
+		BeginRenderLayerFrame(out, RenderLayerCaptureNeededForFrameComposition(), RenderWorldMaskCaptureNeededForFrameComposition());
 	}
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::CursorUndraw);
@@ -1918,6 +1965,7 @@ void scrollrt_draw_game_screen()
 
 	const RenderLayerFrameStats &renderLayerStats = GetRenderLayerFrameStats();
 	SetRenderPerfLayerCaptureStats(renderLayerStats.stampedSpanCount, renderLayerStats.stampedPixelCount);
+	SetRenderPerfWorldMaskStats(renderLayerStats.worldMaskStampedSpanCount, renderLayerStats.worldMaskStampedPixelCount);
 	RenderPresent();
 	EndRenderPerfFrame();
 }
@@ -1957,7 +2005,7 @@ void DrawAndBlit()
 	BeginRenderPerfFrame(*GetOptions().Experimental.renderPerformanceStats);
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::LayerCaptureSetup);
-		BeginRenderLayerFrame(out, RenderLayerCaptureNeededForFrameComposition());
+		BeginRenderLayerFrame(out, RenderLayerCaptureNeededForFrameComposition(), RenderWorldMaskCaptureNeededForFrameComposition());
 	}
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::CursorUndraw);
@@ -2042,6 +2090,7 @@ void DrawAndBlit()
 
 	const RenderLayerFrameStats &renderLayerStats = GetRenderLayerFrameStats();
 	SetRenderPerfLayerCaptureStats(renderLayerStats.stampedSpanCount, renderLayerStats.stampedPixelCount);
+	SetRenderPerfWorldMaskStats(renderLayerStats.worldMaskStampedSpanCount, renderLayerStats.worldMaskStampedPixelCount);
 	RenderPresent();
 	EndRenderPerfFrame();
 }
