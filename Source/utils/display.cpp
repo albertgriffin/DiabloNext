@@ -46,6 +46,7 @@
 #include "controls/touch/gamepad.h"
 #include "engine/backbuffer_state.hpp"
 #include "engine/dx.h"
+#include "engine/render/accelerated_compositor_lifecycle.hpp"
 #include "headless_mode.hpp"
 #include "interfac.h"
 #include "options.h"
@@ -609,6 +610,10 @@ bool SpawnWindow(const char *lpWindowName)
 #else
 	int flags = SDL_WINDOW_ALLOW_HIGHDPI;
 #endif
+	const bool acceleratedFrameCompositorWindow = AcceleratedFrameCompositorWindowRequested();
+	if (acceleratedFrameCompositorWindow) {
+		flags |= ConfigureAcceleratedFrameCompositorWindow();
+	}
 	if (*GetOptions().Graphics.upscale) {
 		if (*GetOptions().Graphics.fullscreen) {
 #ifdef USE_SDL3
@@ -623,7 +628,7 @@ bool SpawnWindow(const char *lpWindowName)
 	}
 
 #ifdef USE_SDL3
-	if (*GetOptions().Graphics.upscale) {
+	if (*GetOptions().Graphics.upscale && !acceleratedFrameCompositorWindow) {
 		if (!SDL_CreateWindowAndRenderer(lpWindowName, windowSize.width, windowSize.height, flags, &ghMainWnd, &renderer)) ErrSdl();
 	} else {
 		ghMainWnd = SDL_CreateWindow(lpWindowName, windowSize.width, windowSize.height, flags);
@@ -750,6 +755,24 @@ void ReinitializeRenderer()
 	}
 	AdjustToScreenGeometry(Size(surface->w, surface->h));
 #else
+
+	if (AcceleratedFrameCompositorRequested()) {
+		if (renderer != nullptr) {
+			texture.reset();
+			SDL_DestroyRenderer(renderer);
+			renderer = nullptr;
+		}
+		if (ReinitializeAcceleratedFrameCompositor(ghMainWnd)) {
+#ifdef USE_SDL3
+			RendererTextureSurface = SDLSurfaceUniquePtr { SDL_CreateSurface(gnScreenWidth, gnScreenHeight, DEVILUTIONX_DISPLAY_TEXTURE_FORMAT) };
+			if (RendererTextureSurface == nullptr) ErrSdl();
+#else
+			RendererTextureSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, gnScreenWidth, gnScreenHeight, SDL_BITSPERPIXEL(DEVILUTIONX_DISPLAY_TEXTURE_FORMAT), DEVILUTIONX_DISPLAY_TEXTURE_FORMAT);
+#endif
+			return;
+		}
+		ShutdownAcceleratedFrameCompositor();
+	}
 
 	if (*GetOptions().Graphics.upscale) {
 		// We don't recreate the renderer, because this can result in a freezing (not refreshing) rendering
@@ -915,6 +938,8 @@ SDL_Surface *GetOutputSurface()
 	return ret;
 #else
 	if (renderer != nullptr)
+		return RendererTextureSurface.get();
+	if (AcceleratedFrameCompositorIsActive() && RendererTextureSurface != nullptr)
 		return RendererTextureSurface.get();
 	SDL_Surface *ret = SDL_GetWindowSurface(ghMainWnd);
 	if (ret == nullptr)

@@ -152,7 +152,7 @@ const std::string &AssetsPath()
 		assetsPath.emplace("D:\\assets\\");
 #elif defined(__3DS__) || defined(__SWITCH__)
 		assetsPath.emplace("romfs:/");
-#elif defined(__APPLE__) && defined(USE_SDL1)
+#elif defined(__APPLE__) && (defined(USE_SDL1) || defined(USE_SDL3))
 		// In `Info.plist` we have
 		//
 		//    <key>SDL_FILESYSTEM_BASE_DIR_TYPE</key>
@@ -166,7 +166,7 @@ const std::string &AssetsPath()
 		// In SDL2, this is implemented by calling `SDL_OpenFPFromBundleOrFallback`
 		// from `SDL_RWFromFile` but SDL1 doesn't do it, so we set the directory explicitly.
 		//
-		// Note that SDL3 reverts to SDL1 behaviour!
+		// SDL3 reverts to SDL1 behaviour, so it needs the same explicit base path.
 		// https://github.com/libsdl-org/SDL/blob/962268ca21ed10b9cee31198c22681099293f20a/docs/README-migration.md?plain=1#L1623
 		assetsPath.emplace(GetSdlBasePath());
 #else

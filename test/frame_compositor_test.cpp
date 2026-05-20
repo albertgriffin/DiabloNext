@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <vector>
 
 #ifdef USE_SDL3
@@ -12,6 +13,8 @@
 #include <SDL.h>
 #endif
 
+#include "engine/render/accelerated_compositor_lifecycle.hpp"
+#include "engine/render/accelerated_palette_compositor.hpp"
 #include "engine/render/frame_compositor.hpp"
 #include "engine/render/render_layer.hpp"
 #include "utils/sdl_wrap.h"
@@ -57,12 +60,151 @@ public:
 	}
 };
 
+class RecordingFrameCompositorBackend final : public IFrameCompositorBackend {
+public:
+	std::string_view Name() const override
+	{
+		return "recording";
+	}
+
+	bool IsAvailable() const override
+	{
+		return available;
+	}
+
+	FrameCompositorBackendResult Compose(const CompositionFrame &frame, SDL_Surface &outputSurface, const std::vector<Rectangle> &rects, RenderPerfCompositionStats &stats) override
+	{
+		composeCallCount++;
+		observedFrame = frame;
+		observedOutputSurface = &outputSurface;
+		observedRects = rects;
+		stats.selectedThreadCount = selectedThreadCount;
+		return composeResult;
+	}
+
+	void Present() override
+	{
+		presentCallCount++;
+	}
+
+	bool available = true;
+	FrameCompositorBackendResult composeResult = FrameCompositorBackendResult::UpdatedOutputSurface;
+	int selectedThreadCount = 7;
+	int composeCallCount = 0;
+	int presentCallCount = 0;
+	CompositionFrame observedFrame {};
+	SDL_Surface *observedOutputSurface = nullptr;
+	std::vector<Rectangle> observedRects;
+};
+
+class RecordingAcceleratedPalettePresenter final : public IAcceleratedPalettePresenter {
+public:
+	std::string_view Name() const override
+	{
+		return "recording-accelerated";
+	}
+
+	bool IsAvailable() const override
+	{
+		return available;
+	}
+
+	bool PrepareIndexedFrame(const AcceleratedPaletteFrame &frame) override
+	{
+		indexedFrameCallCount++;
+		observedIndexedFrame = frame.composition;
+		observedIndexedLighting = frame.lighting;
+		return indexedFrameResult;
+	}
+
+	bool PrepareOutputSurfaceFrame(const AcceleratedPaletteFrame &frame, SDL_Surface &outputSurface) override
+	{
+		outputSurfaceFrameCallCount++;
+		observedOutputFrame = frame.composition;
+		observedOutputSurface = &outputSurface;
+		observedOutputLighting = frame.lighting;
+		return outputSurfaceFrameResult;
+	}
+
+	void Present() override
+	{
+		presentCallCount++;
+	}
+
+	bool available = true;
+	bool indexedFrameResult = true;
+	bool outputSurfaceFrameResult = true;
+	int indexedFrameCallCount = 0;
+	int outputSurfaceFrameCallCount = 0;
+	int presentCallCount = 0;
+	CompositionFrame observedIndexedFrame {};
+	CompositionFrame observedOutputFrame {};
+	const CompositionLightingInputs *observedIndexedLighting = nullptr;
+	const CompositionLightingInputs *observedOutputLighting = nullptr;
+	SDL_Surface *observedOutputSurface = nullptr;
+};
+
+const CompositionSurfaceRoleCoverage &Coverage(const CompositionSurfaceMetadata &metadata, const CompositionSurfaceRole role)
+{
+	return metadata.roles[static_cast<size_t>(role)];
+}
+
 void ExpectWorldTint(const SDL_Surface &surface, const int x, const int y, const SDL_Color baseColor)
 {
 	const SDL_Color color = ReadColor(surface, x, y);
 	EXPECT_EQ(color.r, baseColor.r / 2);
 	EXPECT_EQ(color.g, (static_cast<uint16_t>(baseColor.g) + 255) / 2);
 	EXPECT_EQ(color.b, baseColor.b / 2);
+}
+
+TEST(FrameCompositor, AcceleratedCompositorApiNamesAreStable)
+{
+	EXPECT_EQ(AcceleratedCompositorApiName(AcceleratedCompositorApi::None), "none");
+	EXPECT_EQ(AcceleratedCompositorApiName(AcceleratedCompositorApi::OpenGl), "OpenGL");
+	EXPECT_EQ(AcceleratedCompositorApiName(AcceleratedCompositorApi::SdlGpu), "SDL_GPU");
+}
+
+TEST(FrameCompositor, NeutralCompositionLightingInputsPrepareNoOpBuffers)
+{
+	NeutralCompositionLightingInputs lightingInputs;
+	const CompositionLightingInputs *prepared = lightingInputs.Prepare({ 2, 2 });
+	ASSERT_NE(prepared, nullptr);
+
+	EXPECT_TRUE(prepared->light.IsValid());
+	EXPECT_EQ(prepared->light.size.width, 2);
+	EXPECT_EQ(prepared->light.size.height, 2);
+	EXPECT_EQ(prepared->light.pitch, 8);
+	EXPECT_EQ(prepared->light.format, CompositionLightingBufferFormat::Rgba8);
+	for (size_t i = 0; i < 16; i++) {
+		EXPECT_EQ(prepared->light.pixels[i], 255);
+	}
+
+	EXPECT_TRUE(prepared->shadow.IsValid());
+	EXPECT_EQ(prepared->shadow.size.width, 2);
+	EXPECT_EQ(prepared->shadow.size.height, 2);
+	EXPECT_EQ(prepared->shadow.pitch, 2);
+	EXPECT_EQ(prepared->shadow.format, CompositionLightingBufferFormat::Alpha8);
+	for (size_t i = 0; i < 4; i++) {
+		EXPECT_EQ(prepared->shadow.pixels[i], 0);
+	}
+
+	const uint8_t *lightPixels = prepared->light.pixels;
+	const uint8_t *shadowPixels = prepared->shadow.pixels;
+	EXPECT_EQ(lightingInputs.Prepare({ 2, 2 }), prepared);
+	EXPECT_EQ(prepared->light.pixels, lightPixels);
+	EXPECT_EQ(prepared->shadow.pixels, shadowPixels);
+
+	const CompositionLightingInputs *resized = lightingInputs.Prepare({ 3, 1 });
+	ASSERT_NE(resized, nullptr);
+	EXPECT_EQ(resized->light.size.width, 3);
+	EXPECT_EQ(resized->light.size.height, 1);
+	EXPECT_EQ(resized->light.pitch, 12);
+	EXPECT_EQ(resized->shadow.size.width, 3);
+	EXPECT_EQ(resized->shadow.size.height, 1);
+	EXPECT_EQ(resized->shadow.pitch, 3);
+
+	EXPECT_EQ(lightingInputs.Prepare({ 0, 1 }), nullptr);
+	EXPECT_EQ(lightingInputs.Get(), nullptr);
 }
 
 TEST(FrameCompositor, MakesIndexBufferViewFromEightBitSurface)
@@ -135,6 +277,502 @@ TEST(FrameCompositor, CpuPaletteCompositorRespectsDirtyRects)
 	EXPECT_EQ(ReadColor(*outputSurface, 1, 0).r, 200);
 	EXPECT_EQ(ReadColor(*outputSurface, 1, 0).g, 210);
 	EXPECT_EQ(ReadColor(*outputSurface, 1, 0).b, 220);
+
+	const RenderPerfCompositionStats &stats = compositor.GetLastCompositionStats();
+	EXPECT_FALSE(stats.fullFrameComposed);
+	EXPECT_EQ(stats.fullFrameReason, CompositionFullFrameReason::None);
+	EXPECT_EQ(stats.submittedDirtyRectCount, 1);
+	EXPECT_EQ(stats.normalizedDirtyRectCount, 1);
+	EXPECT_EQ(stats.composedRectCount, 1);
+	EXPECT_EQ(stats.submittedDirtyArea, 1);
+	EXPECT_EQ(stats.normalizedDirtyArea, 1);
+	EXPECT_EQ(stats.composedPixelArea, 1);
+}
+
+TEST(FrameCompositor, CpuPaletteCompositorDelegatesNormalizedRectsToBackend)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 4, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+	pixels[1] = 1;
+	pixels[2] = 1;
+	pixels[3] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 4, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto backend = std::make_unique<RecordingFrameCompositorBackend>();
+	RecordingFrameCompositorBackend *backendPtr = backend.get();
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.BeginFrame({ 4, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 42));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.AddDirtyRect({ { 0, 0 }, { 2, 1 } });
+	compositor.AddDirtyRect({ { 1, 0 }, { 2, 1 } });
+	compositor.Compose();
+
+	EXPECT_EQ(backendPtr->composeCallCount, 1);
+	EXPECT_EQ(backendPtr->observedOutputSurface, outputSurface.get());
+	EXPECT_EQ(backendPtr->observedFrame.logicalSize.width, 4);
+	EXPECT_EQ(backendPtr->observedFrame.indexBuffer.pixels, pixels);
+	EXPECT_EQ(backendPtr->observedFrame.palette.version, 42);
+	ASSERT_EQ(backendPtr->observedRects.size(), 1);
+	EXPECT_EQ(backendPtr->observedRects[0].position.x, 0);
+	EXPECT_EQ(backendPtr->observedRects[0].position.y, 0);
+	EXPECT_EQ(backendPtr->observedRects[0].size.width, 3);
+	EXPECT_EQ(backendPtr->observedRects[0].size.height, 1);
+
+	const RenderPerfCompositionStats &stats = compositor.GetLastCompositionStats();
+	EXPECT_EQ(stats.composedRectCount, 1);
+	EXPECT_EQ(stats.composedPixelArea, 3);
+	EXPECT_EQ(stats.selectedThreadCount, backendPtr->selectedThreadCount);
+}
+
+TEST(FrameCompositor, CpuPaletteCompositorPropagatesCompositionSurfaceMetadataToBackend)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 5, 4, 8, SDL_PIXELFORMAT_INDEX8);
+
+	std::array<SDL_Color, 256> palette {};
+	palette[0] = { 10, 20, 30, 255 };
+
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 5, 4, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto backend = std::make_unique<RecordingFrameCompositorBackend>();
+	RecordingFrameCompositorBackend *backendPtr = backend.get();
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.BeginFrame({ 5, 4 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 42));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.AddDirtyRect({ { 0, 0 }, { 2, 2 } }, CompositionSurfaceRole::World);
+	compositor.AddDirtyRect({ { 3, 1 }, { 1, 2 } }, CompositionSurfaceRole::Interface);
+	compositor.AddDirtyRect({ { 1, 1 }, { 1, 1 } }, CompositionSurfaceRole::Interface);
+	compositor.SetFullFrameDirty(CompositionSurfaceRole::Cursor);
+	compositor.Compose();
+
+	const CompositionSurfaceMetadata &metadata = backendPtr->observedFrame.compositionSurfaceMetadata;
+	const CompositionSurfaceRoleCoverage &world = Coverage(metadata, CompositionSurfaceRole::World);
+	EXPECT_EQ(world.dirtyRectCount, 1);
+	EXPECT_EQ(world.dirtyPixelArea, 4);
+	EXPECT_EQ(world.dirtyBounds.position.x, 0);
+	EXPECT_EQ(world.dirtyBounds.position.y, 0);
+	EXPECT_EQ(world.dirtyBounds.size.width, 2);
+	EXPECT_EQ(world.dirtyBounds.size.height, 2);
+	EXPECT_FALSE(world.fullFrameDirty);
+
+	const CompositionSurfaceRoleCoverage &interface = Coverage(metadata, CompositionSurfaceRole::Interface);
+	EXPECT_EQ(interface.dirtyRectCount, 2);
+	EXPECT_EQ(interface.dirtyPixelArea, 3);
+	EXPECT_EQ(interface.dirtyBounds.position.x, 1);
+	EXPECT_EQ(interface.dirtyBounds.position.y, 1);
+	EXPECT_EQ(interface.dirtyBounds.size.width, 3);
+	EXPECT_EQ(interface.dirtyBounds.size.height, 2);
+	EXPECT_FALSE(interface.fullFrameDirty);
+
+	const CompositionSurfaceRoleCoverage &cursor = Coverage(metadata, CompositionSurfaceRole::Cursor);
+	EXPECT_TRUE(cursor.fullFrameDirty);
+	EXPECT_EQ(cursor.dirtyRectCount, 1);
+	EXPECT_EQ(cursor.dirtyPixelArea, 20);
+	EXPECT_EQ(cursor.dirtyBounds.position.x, 0);
+	EXPECT_EQ(cursor.dirtyBounds.position.y, 0);
+	EXPECT_EQ(cursor.dirtyBounds.size.width, 5);
+	EXPECT_EQ(cursor.dirtyBounds.size.height, 4);
+
+	compositor.Present();
+	EXPECT_EQ(Coverage(compositor.GetCompositionSurfaceMetadata(), CompositionSurfaceRole::World).dirtyRectCount, 0);
+	EXPECT_EQ(Coverage(compositor.GetCompositionSurfaceMetadata(), CompositionSurfaceRole::Interface).dirtyRectCount, 0);
+	EXPECT_FALSE(Coverage(compositor.GetCompositionSurfaceMetadata(), CompositionSurfaceRole::Cursor).fullFrameDirty);
+}
+
+TEST(FrameCompositor, CpuPaletteCompositorReportsDirectPresentationFromBackend)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto backend = std::make_unique<RecordingFrameCompositorBackend>();
+	RecordingFrameCompositorBackend *backendPtr = backend.get();
+	backendPtr->composeResult = FrameCompositorBackendResult::PreparedDirectPresentation;
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.BeginFrame({ 1, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 42));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.SetFullFrameDirty();
+	compositor.Compose();
+
+	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
+	EXPECT_EQ(backendPtr->composeCallCount, 1);
+
+	compositor.Present();
+	EXPECT_EQ(backendPtr->presentCallCount, 1);
+	compositor.Present();
+	EXPECT_EQ(backendPtr->presentCallCount, 1);
+}
+
+TEST(FrameCompositor, AcceleratedPaletteBackendPresentsIndexedFrame)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto presenter = std::make_unique<RecordingAcceleratedPalettePresenter>();
+	RecordingAcceleratedPalettePresenter *presenterPtr = presenter.get();
+	std::unique_ptr<IFrameCompositorBackend> backend = CreateAcceleratedPaletteCompositorBackend(std::move(presenter));
+	ASSERT_NE(backend, nullptr);
+
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.BeginFrame({ 1, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 42));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.SetFullFrameDirty();
+	compositor.Compose();
+
+	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
+	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 1);
+	EXPECT_EQ(presenterPtr->outputSurfaceFrameCallCount, 0);
+	EXPECT_EQ(presenterPtr->observedIndexedFrame.indexBuffer.pixels, pixels);
+	EXPECT_EQ(presenterPtr->observedIndexedFrame.palette.version, 42);
+	ASSERT_NE(presenterPtr->observedIndexedLighting, nullptr);
+	EXPECT_TRUE(presenterPtr->observedIndexedLighting->light.IsValid());
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.size.width, 1);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.size.height, 1);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.pitch, 4);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.format, CompositionLightingBufferFormat::Rgba8);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.pixels[0], 255);
+	EXPECT_TRUE(presenterPtr->observedIndexedLighting->shadow.IsValid());
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.size.width, 1);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.size.height, 1);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.pitch, 1);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.format, CompositionLightingBufferFormat::Alpha8);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.pixels[0], 0);
+	EXPECT_EQ(compositor.GetLastCompositionStats().selectedThreadCount, 1);
+
+	compositor.Present();
+	EXPECT_EQ(presenterPtr->presentCallCount, 1);
+	compositor.Present();
+	EXPECT_EQ(presenterPtr->presentCallCount, 1);
+}
+
+TEST(FrameCompositor, AcceleratedPaletteBackendRetainsNoDirtyDirectPresentationExplicitly)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto presenter = std::make_unique<RecordingAcceleratedPalettePresenter>();
+	RecordingAcceleratedPalettePresenter *presenterPtr = presenter.get();
+	std::unique_ptr<IFrameCompositorBackend> backend = CreateAcceleratedPaletteCompositorBackend(std::move(presenter));
+	ASSERT_NE(backend, nullptr);
+
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.BeginFrame({ 1, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 42));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.SetFullFrameDirty();
+	compositor.Compose();
+	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
+	compositor.Present();
+	EXPECT_EQ(presenterPtr->presentCallCount, 1);
+
+	compositor.BeginFrame({ 1, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 42));
+	compositor.Compose();
+
+	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::RetainedDirectPresentation);
+	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 1);
+	EXPECT_EQ(presenterPtr->outputSurfaceFrameCallCount, 0);
+	EXPECT_EQ(compositor.GetLastCompositionStats().composedRectCount, 0);
+
+	compositor.Present();
+	EXPECT_EQ(presenterPtr->presentCallCount, 2);
+	compositor.Present();
+	EXPECT_EQ(presenterPtr->presentCallCount, 2);
+}
+
+TEST(FrameCompositor, AcceleratedPaletteBackendForwardsCompositionSurfaceMetadata)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 2, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 2, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto presenter = std::make_unique<RecordingAcceleratedPalettePresenter>();
+	RecordingAcceleratedPalettePresenter *presenterPtr = presenter.get();
+	std::unique_ptr<IFrameCompositorBackend> backend = CreateAcceleratedPaletteCompositorBackend(std::move(presenter));
+	ASSERT_NE(backend, nullptr);
+
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.BeginFrame({ 2, 2 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 42));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.AddDirtyRect({ { 1, 0 }, { 1, 2 } }, CompositionSurfaceRole::DiagnosticOverlay);
+	compositor.Compose();
+
+	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
+	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 1);
+	const CompositionSurfaceRoleCoverage &diagnosticOverlay = Coverage(presenterPtr->observedIndexedFrame.compositionSurfaceMetadata, CompositionSurfaceRole::DiagnosticOverlay);
+	EXPECT_EQ(diagnosticOverlay.dirtyRectCount, 1);
+	EXPECT_EQ(diagnosticOverlay.dirtyPixelArea, 2);
+	EXPECT_EQ(diagnosticOverlay.dirtyBounds.position.x, 1);
+	EXPECT_EQ(diagnosticOverlay.dirtyBounds.position.y, 0);
+	EXPECT_EQ(diagnosticOverlay.dirtyBounds.size.width, 1);
+	EXPECT_EQ(diagnosticOverlay.dirtyBounds.size.height, 2);
+}
+
+TEST(FrameCompositor, AcceleratedPaletteBackendUsesCpuPixelsForDiagnostics)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto presenter = std::make_unique<RecordingAcceleratedPalettePresenter>();
+	RecordingAcceleratedPalettePresenter *presenterPtr = presenter.get();
+	std::unique_ptr<IFrameCompositorBackend> backend = CreateAcceleratedPaletteCompositorBackend(std::move(presenter));
+	ASSERT_NE(backend, nullptr);
+
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.BeginFrame({ 1, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 42));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.SetDiagnosticTransformEnabled(true);
+	compositor.SetFullFrameDirty();
+	compositor.Compose();
+
+	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
+	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 0);
+	EXPECT_EQ(presenterPtr->outputSurfaceFrameCallCount, 1);
+	EXPECT_EQ(presenterPtr->observedOutputSurface, outputSurface.get());
+	EXPECT_EQ(presenterPtr->observedOutputFrame.indexBuffer.pixels, pixels);
+	EXPECT_TRUE(presenterPtr->observedOutputFrame.diagnosticTransform);
+	EXPECT_EQ(presenterPtr->observedOutputLighting, nullptr);
+
+	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
+	EXPECT_NE(color.r, palette[1].r);
+	EXPECT_NE(color.b, palette[1].b);
+}
+
+TEST(FrameCompositor, AcceleratedPaletteBackendForwardsLightingInputs)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	std::array<uint8_t, 4> lightPixels { 255, 255, 255, 255 };
+	CompositionLightingInputs lightingInputs {};
+	lightingInputs.light = {
+		lightPixels.data(),
+		{ 1, 1 },
+		4,
+		CompositionLightingBufferFormat::Rgba8,
+	};
+	EXPECT_TRUE(lightingInputs.light.IsValid());
+
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto presenter = std::make_unique<RecordingAcceleratedPalettePresenter>();
+	RecordingAcceleratedPalettePresenter *presenterPtr = presenter.get();
+	std::unique_ptr<IFrameCompositorBackend> backend = CreateAcceleratedPaletteCompositorBackend(std::move(presenter), &lightingInputs);
+	ASSERT_NE(backend, nullptr);
+
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.BeginFrame({ 1, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 42));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.SetFullFrameDirty();
+	compositor.Compose();
+
+	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
+	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 1);
+	EXPECT_EQ(presenterPtr->observedIndexedFrame.indexBuffer.pixels, pixels);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting, &lightingInputs);
+}
+
+TEST(FrameCompositor, AcceleratedPaletteBackendUploadsCpuPixelsWhenIndexedUploadFails)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto presenter = std::make_unique<RecordingAcceleratedPalettePresenter>();
+	RecordingAcceleratedPalettePresenter *presenterPtr = presenter.get();
+	presenterPtr->indexedFrameResult = false;
+	std::unique_ptr<IFrameCompositorBackend> backend = CreateAcceleratedPaletteCompositorBackend(std::move(presenter));
+	ASSERT_NE(backend, nullptr);
+
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.BeginFrame({ 1, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 42));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.SetFullFrameDirty();
+	compositor.Compose();
+
+	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
+	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 1);
+	EXPECT_EQ(presenterPtr->outputSurfaceFrameCallCount, 1);
+	EXPECT_EQ(presenterPtr->observedOutputSurface, outputSurface.get());
+	EXPECT_EQ(presenterPtr->observedOutputFrame.indexBuffer.pixels, pixels);
+	EXPECT_EQ(presenterPtr->observedOutputLighting, nullptr);
+	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(color.r, palette[1].r);
+	EXPECT_EQ(color.g, palette[1].g);
+	EXPECT_EQ(color.b, palette[1].b);
+}
+
+TEST(FrameCompositor, AcceleratedPaletteBackendLeavesCpuSurfaceResultWhenAllUploadsFail)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto presenter = std::make_unique<RecordingAcceleratedPalettePresenter>();
+	RecordingAcceleratedPalettePresenter *presenterPtr = presenter.get();
+	presenterPtr->indexedFrameResult = false;
+	presenterPtr->outputSurfaceFrameResult = false;
+	std::unique_ptr<IFrameCompositorBackend> backend = CreateAcceleratedPaletteCompositorBackend(std::move(presenter));
+	ASSERT_NE(backend, nullptr);
+
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.BeginFrame({ 1, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 42));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.SetFullFrameDirty();
+	compositor.Compose();
+
+	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::UpdatedOutputSurface);
+	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 1);
+	EXPECT_EQ(presenterPtr->outputSurfaceFrameCallCount, 1);
+	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(color.r, palette[1].r);
+	EXPECT_EQ(color.g, palette[1].g);
+	EXPECT_EQ(color.b, palette[1].b);
+
+	compositor.Present();
+	EXPECT_EQ(presenterPtr->presentCallCount, 0);
+}
+
+TEST(FrameCompositor, AcceleratedPaletteBackendFallsBackToCpuWhenPresenterBecomesUnavailable)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto presenter = std::make_unique<RecordingAcceleratedPalettePresenter>();
+	RecordingAcceleratedPalettePresenter *presenterPtr = presenter.get();
+	std::unique_ptr<IFrameCompositorBackend> backend = CreateAcceleratedPaletteCompositorBackend(std::move(presenter));
+	ASSERT_NE(backend, nullptr);
+	presenterPtr->available = false;
+
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.BeginFrame({ 1, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 42));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.SetFullFrameDirty();
+	compositor.Compose();
+
+	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::UpdatedOutputSurface);
+	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 0);
+	EXPECT_EQ(presenterPtr->outputSurfaceFrameCallCount, 0);
+	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(color.r, palette[1].r);
+	EXPECT_EQ(color.g, palette[1].g);
+	EXPECT_EQ(color.b, palette[1].b);
+}
+
+TEST(FrameCompositor, AcceleratedPaletteBackendRefreshesCpuSurfaceWhenRetainedPresenterResets)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto presenter = std::make_unique<RecordingAcceleratedPalettePresenter>();
+	RecordingAcceleratedPalettePresenter *presenterPtr = presenter.get();
+	std::unique_ptr<IFrameCompositorBackend> backend = CreateAcceleratedPaletteCompositorBackend(std::move(presenter));
+	ASSERT_NE(backend, nullptr);
+
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.BeginFrame({ 1, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 42));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.SetFullFrameDirty();
+	compositor.Compose();
+	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
+	compositor.Present();
+
+	presenterPtr->available = false;
+	compositor.BeginFrame({ 1, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 42));
+	compositor.Compose();
+
+	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::UpdatedOutputSurface);
+	EXPECT_EQ(compositor.GetLastCompositionStats().fullFrameReason, CompositionFullFrameReason::DirectPresentationUnavailable);
+	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 1);
+	EXPECT_EQ(presenterPtr->outputSurfaceFrameCallCount, 0);
+	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(color.r, palette[1].r);
+	EXPECT_EQ(color.g, palette[1].g);
+	EXPECT_EQ(color.b, palette[1].b);
 }
 
 TEST(FrameCompositor, CpuPaletteCompositorRecomposesFullFrameWhenPaletteVersionChanges)
@@ -166,6 +804,51 @@ TEST(FrameCompositor, CpuPaletteCompositorRecomposesFullFrameWhenPaletteVersionC
 	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
 	EXPECT_EQ(color.r, 0);
 	EXPECT_EQ(color.g, 255);
+
+	const RenderPerfCompositionStats &stats = compositor.GetLastCompositionStats();
+	EXPECT_TRUE(stats.fullFrameComposed);
+	EXPECT_EQ(stats.fullFrameReason, CompositionFullFrameReason::PaletteChanged);
+	EXPECT_EQ(stats.composedRectCount, 1);
+	EXPECT_EQ(stats.composedPixelArea, 1);
+}
+
+TEST(FrameCompositor, CpuPaletteCompositorInvalidatesMappedPaletteWhenOutputFormatChanges)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 80, 200, 255 };
+
+	SDLSurfaceUniquePtr outputRgba = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+	SDLSurfaceUniquePtr outputBgra = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_BGRA8888);
+
+	CpuPaletteCompositor compositor;
+	compositor.BeginFrame({ 1, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 1));
+	compositor.SetOutputSurface(outputRgba.get());
+	compositor.SetFullFrameDirty();
+	compositor.Compose();
+	compositor.Present();
+
+	SDL_Color color = ReadColor(*outputRgba, 0, 0);
+	EXPECT_EQ(color.r, 10);
+	EXPECT_EQ(color.g, 80);
+	EXPECT_EQ(color.b, 200);
+
+	compositor.BeginFrame({ 1, 1 });
+	compositor.SubmitIndexBuffer(MakeIndexBufferView(*indexSurface));
+	compositor.SubmitPalette(MakePaletteSnapshot(palette, 1));
+	compositor.SetOutputSurface(outputBgra.get());
+	compositor.SetFullFrameDirty();
+	compositor.Compose();
+
+	color = ReadColor(*outputBgra, 0, 0);
+	EXPECT_EQ(color.r, 10);
+	EXPECT_EQ(color.g, 80);
+	EXPECT_EQ(color.b, 200);
 }
 
 TEST(FrameCompositor, CpuPaletteCompositorTreatsEmptyDirtyRectsAsInitialFullFrameOnly)
@@ -254,6 +937,16 @@ TEST(FrameCompositor, CpuPaletteCompositorEscalatesManyDirtyRectsToFullFrame)
 
 	EXPECT_EQ(ReadColor(*outputSurface, 0, 0).r, 40);
 	EXPECT_EQ(ReadColor(*outputSurface, Width - 1, 0).r, 40);
+
+	const RenderPerfCompositionStats &stats = compositor.GetLastCompositionStats();
+	EXPECT_TRUE(stats.fullFrameComposed);
+	EXPECT_EQ(stats.fullFrameReason, CompositionFullFrameReason::TooManyDirtyRects);
+	EXPECT_EQ(stats.submittedDirtyRectCount, 65);
+	EXPECT_EQ(stats.normalizedDirtyRectCount, 0);
+	EXPECT_EQ(stats.submittedDirtyArea, 65);
+	EXPECT_EQ(stats.normalizedDirtyArea, Width);
+	EXPECT_EQ(stats.composedRectCount, 1);
+	EXPECT_EQ(stats.composedPixelArea, Width);
 }
 
 TEST(FrameCompositor, CpuPaletteCompositorAppliesDiagnosticTransformAfterPaletteExpansion)
@@ -304,6 +997,7 @@ TEST(FrameCompositor, RenderLayerDiagnosticOffKeepsPaletteExactOutput)
 	    false,
 	    RenderLayerDiagnosticMode::Off,
 	    { layerMap.data(), 1, 1, 1 },
+	    {},
 	});
 
 	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
@@ -334,6 +1028,7 @@ TEST(FrameCompositor, RenderLayerDiagnosticTintBlendsLayerColor)
 	    false,
 	    RenderLayerDiagnosticMode::Tint,
 	    { layerMap.data(), 1, 1, 1 },
+	    {},
 	});
 
 	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
@@ -368,6 +1063,7 @@ TEST(FrameCompositor, RenderLayerDiagnosticOutlineMarksLayerBoundaries)
 	    false,
 	    RenderLayerDiagnosticMode::Outline,
 	    { layerMap.data(), 2, 1, 2 },
+	    {},
 	});
 
 	const SDL_Color worldBoundary = ReadColor(*outputSurface, 0, 0);
@@ -409,6 +1105,7 @@ TEST(FrameCompositor, RenderLayerDiagnosticTintAndOutlineCombinesEffects)
 	    false,
 	    RenderLayerDiagnosticMode::TintAndOutline,
 	    { layerMap.data(), 3, 1, 3 },
+	    {},
 	});
 
 	const SDL_Color worldBoundary = ReadColor(*outputSurface, 0, 0);
@@ -445,6 +1142,7 @@ TEST(FrameCompositor, RenderLayerDiagnosticRecomposesFullFrameWithoutDirtyRects)
 		false,
 		RenderLayerDiagnosticMode::Tint,
 		{ layerMap.data(), 1, 1, 1 },
+		{},
 	};
 	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
 
@@ -498,6 +1196,7 @@ TEST(FrameCompositor, CpuPaletteCompositorComposesLargeDiagnosticFrameAcrossRowB
 	    false,
 	    RenderLayerDiagnosticMode::TintAndOutline,
 	    { layerMap.data(), Width, Height, Width },
+	    {},
 	});
 
 	ExpectWorldTint(*outputSurface, 0, 0, palette[1]);
@@ -508,6 +1207,9 @@ TEST(FrameCompositor, CpuPaletteCompositorComposesLargeDiagnosticFrameAcrossRowB
 	ExpectWorldTint(*outputSurface, Width - 3, 191, palette[2]);
 	ExpectWorldTint(*outputSurface, 43, 192, palette[2]);
 	ExpectWorldTint(*outputSurface, Width - 3, Height - 1, palette[3]);
+
+	const RenderPerfCompositionStats &stats = compositor.GetLastCompositionStats();
+	EXPECT_EQ(stats.selectedThreadCount, 4);
 }
 
 } // namespace

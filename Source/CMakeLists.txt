@@ -89,7 +89,12 @@ set(libdevilutionx_SRCS
   engine/trn.cpp
 
   engine/render/automap_render.cpp
+  engine/render/accelerated_compositor_lifecycle.cpp
+  engine/render/accelerated_palette_compositor.cpp
   engine/render/frame_compositor.cpp
+  engine/render/opengl_palette_compositor.cpp
+  engine/render/render_perf.cpp
+  engine/render/sdl_gpu_palette_compositor.cpp
   engine/render/scrollrt.cpp
 
   items/validation.cpp
@@ -233,7 +238,6 @@ add_devilutionx_object_library(libdevilutionx_clx_render
 target_link_dependencies(libdevilutionx_clx_render PUBLIC
   DevilutionX::SDL
   fmt::fmt
-  libdevilutionx_light_render
   libdevilutionx_palette_blending
   libdevilutionx_surface
   libdevilutionx_strings
@@ -324,10 +328,9 @@ add_devilutionx_object_library(libdevilutionx_dun_render
 target_link_libraries(libdevilutionx_dun_render
   PUBLIC
   DevilutionX::SDL
-  libdevilutionx_light_render
   libdevilutionx_surface
   PRIVATE
-  libdevilutionx_options
+  libdevilutionx_lighting
 )
 
 add_library(libdevilutionx_endian_write INTERFACE)
@@ -472,10 +475,6 @@ else()
     libdevilutionx_load_clx
   )
 endif()
-
-add_devilutionx_object_library(libdevilutionx_light_render
-  engine/render/light_render.cpp
-)
 
 add_devilutionx_object_library(libdevilutionx_lighting
   lighting.cpp
@@ -944,7 +943,6 @@ target_link_dependencies(libdevilutionx PUBLIC
   libdevilutionx_init
   libdevilutionx_items
   libdevilutionx_level_objects
-  libdevilutionx_light_render
   libdevilutionx_lighting
   libdevilutionx_monster
   libdevilutionx_mpq
@@ -975,6 +973,10 @@ if(NOT TARGET_PLATFORM STREQUAL "dos")
 endif()
 if(DEVILUTIONX_SCREENSHOT_FORMAT STREQUAL DEVILUTIONX_SCREENSHOT_FORMAT_PNG)
   target_link_dependencies(libdevilutionx PUBLIC libdevilutionx_surface_to_png)
+endif()
+if(DEVILUTIONX_OPENGL_PALETTE_COMPOSITOR)
+  find_library(DEVILUTIONX_OPENGL_FRAMEWORK OpenGL REQUIRED)
+  target_link_libraries(libdevilutionx PUBLIC "${DEVILUTIONX_OPENGL_FRAMEWORK}")
 endif()
 
 # Use file GENERATE instead of configure_file because configure_file

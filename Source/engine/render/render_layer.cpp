@@ -149,6 +149,8 @@ void MarkRenderLayerSpanSlow(const uint8_t *dst, int width)
 	if (!TryGetLayerMapSpan(dst, width, index, clippedWidth))
 		return;
 
+	FrameStats.stampedSpanCount++;
+	FrameStats.stampedPixelCount += static_cast<uint64_t>(clippedWidth);
 	MarkLayerMapSpan(index, clippedWidth);
 }
 
