@@ -96,6 +96,12 @@ TEST_F(RenderPerfTest, RecordsCompositionAndLayerCaptureStats)
 	composition.composedPixelArea = 12;
 	composition.selectedThreadCount = 3;
 	composition.parallelCompositionUsed = true;
+	composition.worldRoleDirtyRectCount = 1;
+	composition.interfaceRoleDirtyRectCount = 2;
+	composition.cursorRoleDirtyRectCount = 1;
+	composition.worldRoleDirtyPixelArea = 9;
+	composition.interfaceRoleDirtyPixelArea = 7;
+	composition.cursorRoleDirtyPixelArea = 4;
 	SetRenderPerfCompositionStats(composition);
 	SetRenderPerfLayerCaptureStats(4, 40);
 
@@ -117,6 +123,12 @@ TEST_F(RenderPerfTest, RecordsCompositionAndLayerCaptureStats)
 	EXPECT_EQ(rolling.normalizedDirtyArea, 12);
 	EXPECT_EQ(rolling.composedPixelArea, 12);
 	EXPECT_EQ(rolling.maxSelectedThreadCount, 3);
+	EXPECT_EQ(rolling.worldRoleDirtyRectCount, 1);
+	EXPECT_EQ(rolling.interfaceRoleDirtyRectCount, 2);
+	EXPECT_EQ(rolling.cursorRoleDirtyRectCount, 1);
+	EXPECT_EQ(rolling.worldRoleDirtyPixelArea, 9);
+	EXPECT_EQ(rolling.interfaceRoleDirtyPixelArea, 7);
+	EXPECT_EQ(rolling.cursorRoleDirtyPixelArea, 4);
 	EXPECT_EQ(rolling.layerStampedSpanCount, 4);
 	EXPECT_EQ(rolling.layerStampedPixelCount, 40);
 }

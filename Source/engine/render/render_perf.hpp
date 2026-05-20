@@ -100,6 +100,16 @@ struct RenderPerfCompositionStats {
 	uint32_t backendUpdatedOutputSurfaceCount = 0;
 	uint32_t backendPreparedDirectPresentationCount = 0;
 	uint32_t backendRetainedDirectPresentationCount = 0;
+	uint32_t worldRoleDirtyRectCount = 0;
+	uint32_t worldOverlayRoleDirtyRectCount = 0;
+	uint32_t interfaceRoleDirtyRectCount = 0;
+	uint32_t cursorRoleDirtyRectCount = 0;
+	uint32_t diagnosticOverlayRoleDirtyRectCount = 0;
+	uint64_t worldRoleDirtyPixelArea = 0;
+	uint64_t worldOverlayRoleDirtyPixelArea = 0;
+	uint64_t interfaceRoleDirtyPixelArea = 0;
+	uint64_t cursorRoleDirtyPixelArea = 0;
+	uint64_t diagnosticOverlayRoleDirtyPixelArea = 0;
 };
 
 struct RenderPerfFrameStats {
@@ -132,6 +142,16 @@ struct RenderPerfRollingStats {
 	uint64_t backendUpdatedOutputSurfaceCount = 0;
 	uint64_t backendPreparedDirectPresentationCount = 0;
 	uint64_t backendRetainedDirectPresentationCount = 0;
+	uint64_t worldRoleDirtyRectCount = 0;
+	uint64_t worldOverlayRoleDirtyRectCount = 0;
+	uint64_t interfaceRoleDirtyRectCount = 0;
+	uint64_t cursorRoleDirtyRectCount = 0;
+	uint64_t diagnosticOverlayRoleDirtyRectCount = 0;
+	uint64_t worldRoleDirtyPixelArea = 0;
+	uint64_t worldOverlayRoleDirtyPixelArea = 0;
+	uint64_t interfaceRoleDirtyPixelArea = 0;
+	uint64_t cursorRoleDirtyPixelArea = 0;
+	uint64_t diagnosticOverlayRoleDirtyPixelArea = 0;
 	int maxSelectedThreadCount = 0;
 	CompositionFullFrameReason lastFullFrameReason = CompositionFullFrameReason::None;
 	CompositionUploadFallbackReason lastUploadFallbackReason = CompositionUploadFallbackReason::None;

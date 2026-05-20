@@ -113,6 +113,16 @@ namespace {
 
 constexpr auto RightFrameDisplacement = Displacement { DunFrameWidth, 0 };
 
+[[nodiscard]] bool RenderLayerCaptureNeededForFrameComposition()
+{
+	if (!*GetOptions().Experimental.renderFrameCompositor)
+		return false;
+	if (*GetOptions().Experimental.renderLayerDiagnosticMode != RenderLayerDiagnosticMode::Off)
+		return true;
+	return *GetOptions().Experimental.renderFrameCompositorBackend == RenderFrameCompositorBackend::SdlGpuPalette
+	    && *GetOptions().Experimental.renderLightShadowDiagnosticMode != RenderLightShadowDiagnosticMode::Off;
+}
+
 [[nodiscard]] DVL_ALWAYS_INLINE bool IsFloor(Point tilePosition)
 {
 	return !TileHasAny(tilePosition, TileProperties::Solid | TileProperties::BlockMissile);
@@ -1890,7 +1900,7 @@ void scrollrt_draw_game_screen()
 	const Surface &out = GlobalBackBuffer();
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::LayerCaptureSetup);
-		BeginRenderLayerFrame(out, *GetOptions().Experimental.renderFrameCompositor && *GetOptions().Experimental.renderLayerDiagnosticMode != RenderLayerDiagnosticMode::Off);
+		BeginRenderLayerFrame(out, RenderLayerCaptureNeededForFrameComposition());
 	}
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::CursorUndraw);
@@ -1947,7 +1957,7 @@ void DrawAndBlit()
 	BeginRenderPerfFrame(*GetOptions().Experimental.renderPerformanceStats);
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::LayerCaptureSetup);
-		BeginRenderLayerFrame(out, *GetOptions().Experimental.renderFrameCompositor && *GetOptions().Experimental.renderLayerDiagnosticMode != RenderLayerDiagnosticMode::Off);
+		BeginRenderLayerFrame(out, RenderLayerCaptureNeededForFrameComposition());
 	}
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::CursorUndraw);

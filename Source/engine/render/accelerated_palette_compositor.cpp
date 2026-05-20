@@ -11,6 +11,7 @@
 #include <string_view>
 #include <utility>
 
+#include "engine/render/render_layer.hpp"
 #include "options.h"
 #include "utils/log.hpp"
 
@@ -39,6 +40,41 @@ DevelopmentCompositionLightingInputs &GlobalDevelopmentLightingInputs()
 	DirtyRectList dirtyRects;
 	dirtyRects.fullFrame = true;
 	return dirtyRects;
+}
+
+[[nodiscard]] bool RenderLayerMapContains(const RenderLayerMapView &renderLayerMap, const Size size, const Point position)
+{
+	return renderLayerMap.pixels != nullptr
+	    && renderLayerMap.width >= size.width
+	    && renderLayerMap.height >= size.height
+	    && renderLayerMap.pitch >= renderLayerMap.width
+	    && position.x >= 0
+	    && position.y >= 0
+	    && position.x < renderLayerMap.width
+	    && position.y < renderLayerMap.height;
+}
+
+[[nodiscard]] bool WorldEffectsAffectLayer(const uint8_t layerId)
+{
+	switch (static_cast<RenderLayer>(layerId)) {
+	case RenderLayer::World:
+	case RenderLayer::WorldOverlay:
+		return true;
+	case RenderLayer::Interface:
+	case RenderLayer::Cursor:
+	case RenderLayer::Debug:
+	case RenderLayer::Count:
+		return false;
+	}
+	return layerId == UnknownRenderLayerId;
+}
+
+[[nodiscard]] bool WorldEffectsAffectPixel(const RenderLayerMapView &renderLayerMap, const Size size, const Point position)
+{
+	if (!RenderLayerMapContains(renderLayerMap, size, position))
+		return true;
+	const auto *row = renderLayerMap.pixels + static_cast<size_t>(position.y) * renderLayerMap.pitch;
+	return WorldEffectsAffectLayer(row[position.x]);
 }
 
 class AcceleratedPaletteCompositorBackend final : public IFrameCompositorBackend {
@@ -95,7 +131,7 @@ public:
 		}
 
 		stats.selectedThreadCount = std::max(stats.selectedThreadCount, 1);
-		const CompositionLightingInputs *lightingInputs = LightingInputsForIndexedFrame(frame.logicalSize);
+		const CompositionLightingInputs *lightingInputs = LightingInputsForIndexedFrame(frame);
 		if (!presenter_->PrepareIndexedFrame({ frame, lightingInputs, rects }, stats)) {
 			const FrameCompositorBackendResult fallbackResult = cpuFallback_->Compose(frame, outputSurface, rects, stats);
 			if (fallbackResult == FrameCompositorBackendResult::NoFrameProduced) {
@@ -125,7 +161,7 @@ private:
 		return presenter_ != nullptr && presenter_->IsAvailable();
 	}
 
-	[[nodiscard]] const CompositionLightingInputs *LightingInputsForIndexedFrame(const Size logicalSize)
+	[[nodiscard]] const CompositionLightingInputs *LightingInputsForIndexedFrame(const CompositionFrame &frame)
 	{
 		if (lightingInputs_ != nullptr)
 			return lightingInputs_;
@@ -136,10 +172,10 @@ private:
 				Log("{} using development light/shadow diagnostic: {}", Name(), RenderLightShadowDiagnosticModeName(diagnosticMode));
 				loggedDiagnosticMode_ = diagnosticMode;
 			}
-			return PrepareDevelopmentCompositionLightingInputs(logicalSize, diagnosticMode);
+			return PrepareDevelopmentCompositionLightingInputs(frame.logicalSize, diagnosticMode, frame.renderLayerMap);
 		}
 		loggedDiagnosticMode_ = RenderLightShadowDiagnosticMode::Off;
-		return PrepareNeutralCompositionLightingInputs(logicalSize);
+		return PrepareNeutralCompositionLightingInputs(frame.logicalSize);
 	}
 
 	std::unique_ptr<IAcceleratedPalettePresenter> presenter_;
@@ -197,7 +233,7 @@ const CompositionLightingInputs *NeutralCompositionLightingInputs::Get() const
 	return inputs_.light.IsValid() && inputs_.shadow.IsValid() ? &inputs_ : nullptr;
 }
 
-const CompositionLightingInputs *DevelopmentCompositionLightingInputs::Prepare(const Size size, const RenderLightShadowDiagnosticMode mode)
+const CompositionLightingInputs *DevelopmentCompositionLightingInputs::Prepare(const Size size, const RenderLightShadowDiagnosticMode mode, const RenderLayerMapView renderLayerMap)
 {
 	if (mode == RenderLightShadowDiagnosticMode::Off || size.width <= 0 || size.height <= 0) {
 		size_ = {};
@@ -227,13 +263,22 @@ const CompositionLightingInputs *DevelopmentCompositionLightingInputs::Prepare(c
 		auto *lightRow = lightPixels_.data() + static_cast<size_t>(y) * lightPitch;
 		auto *shadowRow = shadowPixels_.data() + static_cast<size_t>(y) * shadowPitch;
 		for (int x = 0; x < size.width; x++) {
+			const size_t lightOffset = static_cast<size_t>(x) * 4;
+			if (!WorldEffectsAffectPixel(renderLayerMap, size, { x, y })) {
+				lightRow[lightOffset + 0] = 255;
+				lightRow[lightOffset + 1] = 255;
+				lightRow[lightOffset + 2] = 255;
+				lightRow[lightOffset + 3] = 255;
+				shadowRow[x] = 0;
+				continue;
+			}
+
 			const int dx = x - centerX;
 			const int dy = y - centerY;
 			const int distanceSquared = dx * dx + dy * dy;
 			const int radial = distanceSquared >= radiusSquared ? 0 : 255 - distanceSquared * 255 / radiusSquared;
 			const int stripePhase = static_cast<int>((static_cast<uint64_t>(x) + frame * 5) % 96);
 			const int stripe = stripePhase < 24 ? 72 : 0;
-			const size_t lightOffset = static_cast<size_t>(x) * 4;
 			lightRow[lightOffset + 0] = ClampByte(112 + radial / 2 + stripe);
 			lightRow[lightOffset + 1] = ClampByte(104 + radial * 3 / 4);
 			lightRow[lightOffset + 2] = ClampByte(120 + radial + stripe / 2);
@@ -277,8 +322,7 @@ const CompositionLightingInputs *DevelopmentCompositionLightingInputs::Get() con
 bool AcceleratedPaletteFrameRequiresCpuPixels(const CompositionFrame &frame)
 {
 	return frame.diagnosticTransform
-	    || frame.renderLayerDiagnosticMode != RenderLayerDiagnosticMode::Off
-	    || frame.renderLayerMap.pixels != nullptr;
+	    || frame.renderLayerDiagnosticMode != RenderLayerDiagnosticMode::Off;
 }
 
 const CompositionLightingInputs *PrepareNeutralCompositionLightingInputs(const Size size)
@@ -286,9 +330,9 @@ const CompositionLightingInputs *PrepareNeutralCompositionLightingInputs(const S
 	return GlobalNeutralLightingInputs().Prepare(size);
 }
 
-const CompositionLightingInputs *PrepareDevelopmentCompositionLightingInputs(const Size size, const RenderLightShadowDiagnosticMode mode)
+const CompositionLightingInputs *PrepareDevelopmentCompositionLightingInputs(const Size size, const RenderLightShadowDiagnosticMode mode, const RenderLayerMapView renderLayerMap)
 {
-	return GlobalDevelopmentLightingInputs().Prepare(size, mode);
+	return GlobalDevelopmentLightingInputs().Prepare(size, mode, renderLayerMap);
 }
 
 std::unique_ptr<IFrameCompositorBackend> CreateAcceleratedPaletteCompositorBackend(std::unique_ptr<IAcceleratedPalettePresenter> presenter, const CompositionLightingInputs *lightingInputs)

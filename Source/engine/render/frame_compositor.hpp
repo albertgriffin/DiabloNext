@@ -58,6 +58,7 @@ enum class CompositionAttachmentRole : uint8_t {
 	IndexedAlbedo,
 	Palette,
 	WorldIndex,
+	WorldOverlayIndex,
 	WorldMaterial,
 	WorldDepth,
 	WorldHeight,

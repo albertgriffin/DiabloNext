@@ -455,6 +455,81 @@ void AccumulateCompositionSurfaceFullFrame(CompositionSurfaceMetadata &metadata,
 	return CompositionSurfaceRole::DiagnosticOverlay;
 }
 
+[[nodiscard]] CompositionAttachmentRole CompositionAttachmentRoleForSurfaceRole(const CompositionSurfaceRole role)
+{
+	switch (role) {
+	case CompositionSurfaceRole::World:
+		return CompositionAttachmentRole::WorldIndex;
+	case CompositionSurfaceRole::WorldOverlay:
+		return CompositionAttachmentRole::WorldOverlayIndex;
+	case CompositionSurfaceRole::Interface:
+		return CompositionAttachmentRole::InterfaceIndex;
+	case CompositionSurfaceRole::Cursor:
+		return CompositionAttachmentRole::CursorIndex;
+	case CompositionSurfaceRole::DiagnosticOverlay:
+	case CompositionSurfaceRole::Count:
+		return CompositionAttachmentRole::Diagnostic;
+	}
+	return CompositionAttachmentRole::Diagnostic;
+}
+
+[[nodiscard]] DirtyRectList DirtyRectsForCompositionSurfaceRole(const CompositionSurfaceMetadata &metadata, const CompositionSurfaceRole role)
+{
+	DirtyRectList dirtyRects;
+	const size_t roleIndex = CompositionSurfaceRoleIndex(role);
+	if (roleIndex >= CompositionSurfaceRoleCount)
+		return dirtyRects;
+
+	const CompositionSurfaceRoleCoverage &coverage = metadata.roles[roleIndex];
+	if (coverage.fullFrameDirty) {
+		dirtyRects.fullFrame = true;
+		return dirtyRects;
+	}
+	if (coverage.dirtyRectCount > 0 && !IsEmpty(coverage.dirtyBounds))
+		dirtyRects.rects.push_back(coverage.dirtyBounds);
+	return dirtyRects;
+}
+
+[[nodiscard]] CompositionAttachment MakeSharedIndexSurfaceRoleAttachment(const CompositionSurfaceMetadata &metadata, const CompositionSurfaceRole role, const IndexBufferView indexBuffer, const Size logicalSize)
+{
+	return {
+		CompositionAttachmentRoleForSurfaceRole(role),
+		CompositionAttachmentFormat::Index8,
+		logicalSize,
+		indexBuffer.pitch,
+		indexBuffer.version,
+		DirtyRectsForCompositionSurfaceRole(metadata, role),
+		indexBuffer.pixels,
+	};
+}
+
+void UpsertCompositionSurfaceRoleAttachments(std::vector<CompositionAttachment> &attachments, const CompositionSurfaceMetadata &metadata, const IndexBufferView indexBuffer, const Size logicalSize)
+{
+	UpsertCompositionAttachment(attachments, MakeSharedIndexSurfaceRoleAttachment(metadata, CompositionSurfaceRole::World, indexBuffer, logicalSize));
+	UpsertCompositionAttachment(attachments, MakeSharedIndexSurfaceRoleAttachment(metadata, CompositionSurfaceRole::WorldOverlay, indexBuffer, logicalSize));
+	UpsertCompositionAttachment(attachments, MakeSharedIndexSurfaceRoleAttachment(metadata, CompositionSurfaceRole::Interface, indexBuffer, logicalSize));
+	UpsertCompositionAttachment(attachments, MakeSharedIndexSurfaceRoleAttachment(metadata, CompositionSurfaceRole::Cursor, indexBuffer, logicalSize));
+	UpsertCompositionAttachment(attachments, MakeSharedIndexSurfaceRoleAttachment(metadata, CompositionSurfaceRole::DiagnosticOverlay, indexBuffer, logicalSize));
+}
+
+void RecordCompositionSurfaceStats(RenderPerfCompositionStats &stats, const CompositionSurfaceMetadata &metadata)
+{
+	const auto coverage = [&](const CompositionSurfaceRole role) -> const CompositionSurfaceRoleCoverage & {
+		return metadata.roles[CompositionSurfaceRoleIndex(role)];
+	};
+
+	stats.worldRoleDirtyRectCount = coverage(CompositionSurfaceRole::World).dirtyRectCount;
+	stats.worldOverlayRoleDirtyRectCount = coverage(CompositionSurfaceRole::WorldOverlay).dirtyRectCount;
+	stats.interfaceRoleDirtyRectCount = coverage(CompositionSurfaceRole::Interface).dirtyRectCount;
+	stats.cursorRoleDirtyRectCount = coverage(CompositionSurfaceRole::Cursor).dirtyRectCount;
+	stats.diagnosticOverlayRoleDirtyRectCount = coverage(CompositionSurfaceRole::DiagnosticOverlay).dirtyRectCount;
+	stats.worldRoleDirtyPixelArea = coverage(CompositionSurfaceRole::World).dirtyPixelArea;
+	stats.worldOverlayRoleDirtyPixelArea = coverage(CompositionSurfaceRole::WorldOverlay).dirtyPixelArea;
+	stats.interfaceRoleDirtyPixelArea = coverage(CompositionSurfaceRole::Interface).dirtyPixelArea;
+	stats.cursorRoleDirtyPixelArea = coverage(CompositionSurfaceRole::Cursor).dirtyPixelArea;
+	stats.diagnosticOverlayRoleDirtyPixelArea = coverage(CompositionSurfaceRole::DiagnosticOverlay).dirtyPixelArea;
+}
+
 void MergeOverlapsAt(std::vector<Rectangle> &rects, size_t index)
 {
 	bool merged = true;
@@ -1028,6 +1103,7 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 	lastCompositionStats_ = {};
 	lastCompositionStats_.compositorEnabled = true;
 	lastCompositionStats_.layerCaptureEnabled = frame.renderLayerMap.pixels != nullptr;
+	RecordCompositionSurfaceStats(lastCompositionStats_, compositionSurfaceMetadata_);
 	lastBackendResult_ = FrameCompositorBackendResult::NoFrameProduced;
 	directPresentationPending_ = false;
 
@@ -1109,6 +1185,7 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 		};
 		UpsertCompositionAttachment(backendFrame.attachments, MakeIndexedAlbedoAttachment(indexBuffer_, logicalSize_, frame.dirtyRects));
 		UpsertCompositionAttachment(backendFrame.attachments, MakePaletteAttachment(palette_));
+		UpsertCompositionSurfaceRoleAttachments(backendFrame.attachments, compositionSurfaceMetadata_, indexBuffer_, logicalSize_);
 
 		const FrameCompositorBackendResult result = ComposeRects(backendFrame, rects);
 		RecordBackendResult(lastCompositionStats_, result);
@@ -1170,6 +1247,7 @@ void CpuPaletteCompositor::Compose()
 	};
 	UpsertCompositionAttachment(frame.attachments, MakeIndexedAlbedoAttachment(indexBuffer_, logicalSize_, dirtyRects_));
 	UpsertCompositionAttachment(frame.attachments, MakePaletteAttachment(palette_));
+	UpsertCompositionSurfaceRoleAttachments(frame.attachments, compositionSurfaceMetadata_, indexBuffer_, logicalSize_);
 	Compose(frame);
 }
 

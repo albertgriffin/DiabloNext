@@ -61,7 +61,7 @@ private:
 
 class DevelopmentCompositionLightingInputs {
 public:
-	[[nodiscard]] const CompositionLightingInputs *Prepare(Size size, RenderLightShadowDiagnosticMode mode);
+	[[nodiscard]] const CompositionLightingInputs *Prepare(Size size, RenderLightShadowDiagnosticMode mode, RenderLayerMapView renderLayerMap = {});
 	[[nodiscard]] const CompositionLightingInputs *Get() const;
 
 private:
@@ -91,7 +91,7 @@ public:
 
 [[nodiscard]] bool AcceleratedPaletteFrameRequiresCpuPixels(const CompositionFrame &frame);
 [[nodiscard]] const CompositionLightingInputs *PrepareNeutralCompositionLightingInputs(Size size);
-[[nodiscard]] const CompositionLightingInputs *PrepareDevelopmentCompositionLightingInputs(Size size, RenderLightShadowDiagnosticMode mode);
+[[nodiscard]] const CompositionLightingInputs *PrepareDevelopmentCompositionLightingInputs(Size size, RenderLightShadowDiagnosticMode mode, RenderLayerMapView renderLayerMap = {});
 [[nodiscard]] std::unique_ptr<IFrameCompositorBackend> CreateAcceleratedPaletteCompositorBackend(std::unique_ptr<IAcceleratedPalettePresenter> presenter, const CompositionLightingInputs *lightingInputs = nullptr);
 
 } // namespace devilution

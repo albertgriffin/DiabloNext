@@ -99,6 +99,16 @@ void AccumulateFrame()
 	RollingStats.backendUpdatedOutputSurfaceCount += composition.backendUpdatedOutputSurfaceCount;
 	RollingStats.backendPreparedDirectPresentationCount += composition.backendPreparedDirectPresentationCount;
 	RollingStats.backendRetainedDirectPresentationCount += composition.backendRetainedDirectPresentationCount;
+	RollingStats.worldRoleDirtyRectCount += composition.worldRoleDirtyRectCount;
+	RollingStats.worldOverlayRoleDirtyRectCount += composition.worldOverlayRoleDirtyRectCount;
+	RollingStats.interfaceRoleDirtyRectCount += composition.interfaceRoleDirtyRectCount;
+	RollingStats.cursorRoleDirtyRectCount += composition.cursorRoleDirtyRectCount;
+	RollingStats.diagnosticOverlayRoleDirtyRectCount += composition.diagnosticOverlayRoleDirtyRectCount;
+	RollingStats.worldRoleDirtyPixelArea += composition.worldRoleDirtyPixelArea;
+	RollingStats.worldOverlayRoleDirtyPixelArea += composition.worldOverlayRoleDirtyPixelArea;
+	RollingStats.interfaceRoleDirtyPixelArea += composition.interfaceRoleDirtyPixelArea;
+	RollingStats.cursorRoleDirtyPixelArea += composition.cursorRoleDirtyPixelArea;
+	RollingStats.diagnosticOverlayRoleDirtyPixelArea += composition.diagnosticOverlayRoleDirtyPixelArea;
 	RollingStats.maxSelectedThreadCount = std::max(RollingStats.maxSelectedThreadCount, composition.selectedThreadCount);
 	RollingStats.layerStampedSpanCount += CurrentFrame.layerStampedSpanCount;
 	RollingStats.layerStampedPixelCount += CurrentFrame.layerStampedPixelCount;
@@ -110,7 +120,7 @@ void LogRollingStats()
 	if (frames == 0)
 		return;
 
-	Log("RenderPerf frames={} avg_us cursor_undraw={} world={} interface={} cursor={} debug={} dirty_blit={} compose={} present={} world_detail setup={} lightmap={} floor={} tiles={} oob={} zoom={} overlay={} debug={} view_ui={} layer_setup={} tile_detail cell={} missile={} corpse={} object={} item={} player={} monster={} special={} dirty_rects submitted={} normalized={} composed={} dirty_area submitted={} normalized={} composed={} full_frames={} last_full_reason={} parallel_frames={} max_threads={} upload bytes={} rects={} skipped={} full={} failed={} last_upload_fallback={} backend_results no_frame={} cpu_surface={} direct_prepared={} direct_retained={} layer_spans={} layer_pixels={}",
+	Log("RenderPerf frames={} avg_us cursor_undraw={} world={} interface={} cursor={} debug={} dirty_blit={} compose={} present={} world_detail setup={} lightmap={} floor={} tiles={} oob={} zoom={} overlay={} debug={} view_ui={} layer_setup={} tile_detail cell={} missile={} corpse={} object={} item={} player={} monster={} special={} dirty_rects submitted={} normalized={} composed={} dirty_area submitted={} normalized={} composed={} full_frames={} last_full_reason={} parallel_frames={} max_threads={} upload bytes={} rects={} skipped={} full={} failed={} last_upload_fallback={} backend_results no_frame={} cpu_surface={} direct_prepared={} direct_retained={} role_rects world={} world_overlay={} interface={} cursor={} diagnostic={} role_area world={} world_overlay={} interface={} cursor={} diagnostic={} layer_spans={} layer_pixels={}",
 	    frames,
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::CursorUndraw)], frames),
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::WorldDraw)], frames),
@@ -158,6 +168,16 @@ void LogRollingStats()
 	    RollingStats.backendUpdatedOutputSurfaceCount,
 	    RollingStats.backendPreparedDirectPresentationCount,
 	    RollingStats.backendRetainedDirectPresentationCount,
+	    Average(RollingStats.worldRoleDirtyRectCount, frames),
+	    Average(RollingStats.worldOverlayRoleDirtyRectCount, frames),
+	    Average(RollingStats.interfaceRoleDirtyRectCount, frames),
+	    Average(RollingStats.cursorRoleDirtyRectCount, frames),
+	    Average(RollingStats.diagnosticOverlayRoleDirtyRectCount, frames),
+	    Average(RollingStats.worldRoleDirtyPixelArea, frames),
+	    Average(RollingStats.worldOverlayRoleDirtyPixelArea, frames),
+	    Average(RollingStats.interfaceRoleDirtyPixelArea, frames),
+	    Average(RollingStats.cursorRoleDirtyPixelArea, frames),
+	    Average(RollingStats.diagnosticOverlayRoleDirtyPixelArea, frames),
 	    Average(RollingStats.layerStampedSpanCount, frames),
 	    Average(RollingStats.layerStampedPixelCount, frames));
 }
