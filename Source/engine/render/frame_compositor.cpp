@@ -63,6 +63,12 @@ constexpr unsigned MaxParallelCompositionThreads = 6;
 int ThreadCountOverrideForTesting = 0;
 #endif
 
+[[nodiscard]] bool UsesDirectPresentation(const FrameCompositorBackendResult result)
+{
+	return result == FrameCompositorBackendResult::PreparedDirectPresentation
+	    || result == FrameCompositorBackendResult::RetainedDirectPresentation;
+}
+
 #if DEVILUTIONX_PARALLEL_COMPOSITION
 struct CompositionWorkerBand {
 	int yBegin = 0;
@@ -525,7 +531,7 @@ public:
 			if (ComposeRect(frame, outputSurface, rect, stats))
 				composed = true;
 		}
-		return composed ? FrameCompositorBackendResult::UpdatedOutputSurface : FrameCompositorBackendResult::None;
+		return composed ? FrameCompositorBackendResult::UpdatedOutputSurface : FrameCompositorBackendResult::NoFrameProduced;
 	}
 
 private:
@@ -855,7 +861,9 @@ void CpuPaletteCompositor::SetBackend(std::unique_ptr<IFrameCompositorBackend> b
 {
 	backend_ = std::move(backend);
 	hasComposedFrame_ = false;
-	lastBackendResult_ = FrameCompositorBackendResult::None;
+	lastBackendResult_ = FrameCompositorBackendResult::NoFrameProduced;
+	directPresentationPending_ = false;
+	lastComposedFrameUsedDirectPresentation_ = false;
 	outputSurfaceChangedSinceComposition_ = true;
 }
 
@@ -899,7 +907,8 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 	lastCompositionStats_ = {};
 	lastCompositionStats_.compositorEnabled = true;
 	lastCompositionStats_.layerCaptureEnabled = frame.renderLayerMap.pixels != nullptr;
-	lastBackendResult_ = FrameCompositorBackendResult::None;
+	lastBackendResult_ = FrameCompositorBackendResult::NoFrameProduced;
+	directPresentationPending_ = false;
 
 	if (logicalSize_.width <= 0 || logicalSize_.height <= 0) {
 		SetRenderPerfCompositionStats(lastCompositionStats_);
@@ -920,7 +929,8 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 	lastCompositionStats_.submittedDirtyArea = normalizedDirtyRects.submittedArea;
 	lastCompositionStats_.normalizedDirtyArea = normalizedDirtyRects.normalizedArea;
 
-	const bool emptyInitialFrame = !hasComposedFrame_ && normalizedDirtyRects.dirtyRects.rects.empty() && !normalizedDirtyRects.dirtyRects.fullFrame;
+	const bool noDirtyRects = normalizedDirtyRects.dirtyRects.rects.empty() && !normalizedDirtyRects.dirtyRects.fullFrame;
+	const bool emptyInitialFrame = !hasComposedFrame_ && noDirtyRects;
 	CompositionFullFrameReason fullFrameReason = CompositionFullFrameReason::None;
 	if (normalizedDirtyRects.dirtyRects.fullFrame) {
 		fullFrameReason = normalizedDirtyRects.tooManyDirtyRects ? CompositionFullFrameReason::TooManyDirtyRects : CompositionFullFrameReason::Requested;
@@ -938,6 +948,8 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 		fullFrameReason = CompositionFullFrameReason::IndexBufferChanged;
 	} else if (logicalSizeChanged) {
 		fullFrameReason = CompositionFullFrameReason::LogicalSizeChanged;
+	} else if (noDirtyRects && lastComposedFrameUsedDirectPresentation_ && (backend_ == nullptr || !backend_->CanRetainDirectPresentation())) {
+		fullFrameReason = CompositionFullFrameReason::DirectPresentationUnavailable;
 	} else if (emptyInitialFrame) {
 		fullFrameReason = CompositionFullFrameReason::FirstFrame;
 	}
@@ -970,10 +982,12 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 		                                                             compositionSurfaceMetadata_,
 		                                                         },
 		    rects);
-		if (result == FrameCompositorBackendResult::None) {
+		if (result == FrameCompositorBackendResult::NoFrameProduced) {
 			return false;
 		}
 		lastBackendResult_ = result;
+		directPresentationPending_ = UsesDirectPresentation(result);
+		lastComposedFrameUsedDirectPresentation_ = directPresentationPending_;
 		for (const Rectangle &rect : rects) {
 			recordComposedRect(rect);
 		}
@@ -989,6 +1003,15 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 		return;
 	}
 
+	if (noDirtyRects && backend_ != nullptr && backend_->CanRetainDirectPresentation()) {
+		lastBackendResult_ = FrameCompositorBackendResult::RetainedDirectPresentation;
+		directPresentationPending_ = true;
+		lastComposedFrameUsedDirectPresentation_ = true;
+		markComposedFrame();
+		SetRenderPerfCompositionStats(lastCompositionStats_);
+		return;
+	}
+
 	composeRects(normalizedDirtyRects.dirtyRects.rects);
 	SetRenderPerfCompositionStats(lastCompositionStats_);
 }
@@ -996,7 +1019,7 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 FrameCompositorBackendResult CpuPaletteCompositor::ComposeRects(const CompositionFrame &frame, const std::vector<Rectangle> &rects)
 {
 	if (rects.empty() || outputSurface_ == nullptr || backend_ == nullptr || !backend_->IsAvailable())
-		return FrameCompositorBackendResult::None;
+		return FrameCompositorBackendResult::NoFrameProduced;
 
 	return backend_->Compose(frame, *outputSurface_, rects, lastCompositionStats_);
 }
@@ -1017,8 +1040,9 @@ void CpuPaletteCompositor::Compose()
 
 void CpuPaletteCompositor::Present()
 {
-	if (backend_ != nullptr)
+	if (backend_ != nullptr && directPresentationPending_)
 		backend_->Present();
+	directPresentationPending_ = false;
 	ResetDirtyRects();
 }
 
@@ -1069,8 +1093,7 @@ bool ComposeFrameToOutput(SDL_Surface *outputSurface)
 		});
 	}
 	const FrameCompositorBackendResult backendResult = FrameCompositor.GetLastBackendResult();
-	return backendResult == FrameCompositorBackendResult::Presented
-	    || (backendResult == FrameCompositorBackendResult::None && AcceleratedFrameCompositorIsActive());
+	return UsesDirectPresentation(backendResult);
 }
 
 void PresentFrameComposition()

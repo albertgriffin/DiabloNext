@@ -86,9 +86,14 @@ struct CompositionFrame {
 };
 
 enum class FrameCompositorBackendResult : uint8_t {
-	None,
+	/** No CPU surface update and no direct presentation frame was produced for this composition pass. */
+	NoFrameProduced,
+	/** The CPU output surface now contains the composed frame; the caller must present it through the normal SDL path. */
 	UpdatedOutputSurface,
-	Presented,
+	/** A backend-specific direct presentation frame was prepared; Present() must be called once to display it. */
+	PreparedDirectPresentation,
+	/** No new pixels were uploaded, but a previously prepared direct presentation frame is still valid for this frame. */
+	RetainedDirectPresentation,
 };
 
 class IFrameCompositorBackend {
@@ -97,6 +102,7 @@ public:
 
 	[[nodiscard]] virtual std::string_view Name() const = 0;
 	[[nodiscard]] virtual bool IsAvailable() const = 0;
+	[[nodiscard]] virtual bool CanRetainDirectPresentation() const { return false; }
 	[[nodiscard]] virtual FrameCompositorBackendResult Compose(const CompositionFrame &frame, SDL_Surface &outputSurface, const std::vector<Rectangle> &rects, RenderPerfCompositionStats &stats) = 0;
 	virtual void Present() { }
 };
@@ -164,7 +170,9 @@ private:
 	bool outputSurfaceChangedSinceComposition_ = false;
 	bool indexBufferChangedSinceComposition_ = false;
 	bool logicalSizeChangedSinceComposition_ = false;
-	FrameCompositorBackendResult lastBackendResult_ = FrameCompositorBackendResult::None;
+	bool directPresentationPending_ = false;
+	bool lastComposedFrameUsedDirectPresentation_ = false;
+	FrameCompositorBackendResult lastBackendResult_ = FrameCompositorBackendResult::NoFrameProduced;
 	RenderPerfCompositionStats lastCompositionStats_ {};
 };
 

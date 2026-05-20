@@ -41,37 +41,57 @@ public:
 		return cpuFallback_ != nullptr && cpuFallback_->IsAvailable();
 	}
 
+	bool CanRetainDirectPresentation() const override
+	{
+		return hasDirectPresentationFrame_ && PresenterAvailable();
+	}
+
 	FrameCompositorBackendResult Compose(const CompositionFrame &frame, SDL_Surface &outputSurface, const std::vector<Rectangle> &rects, RenderPerfCompositionStats &stats) override
 	{
-		if (cpuFallback_ == nullptr || !cpuFallback_->IsAvailable())
-			return FrameCompositorBackendResult::None;
-		if (!PresenterAvailable())
+		if (cpuFallback_ == nullptr || !cpuFallback_->IsAvailable()) {
+			hasDirectPresentationFrame_ = false;
+			return FrameCompositorBackendResult::NoFrameProduced;
+		}
+		if (!PresenterAvailable()) {
+			hasDirectPresentationFrame_ = false;
 			return cpuFallback_->Compose(frame, outputSurface, rects, stats);
+		}
 
 		if (AcceleratedPaletteFrameRequiresCpuPixels(frame)) {
 			const FrameCompositorBackendResult fallbackResult = cpuFallback_->Compose(frame, outputSurface, rects, stats);
-			if (fallbackResult == FrameCompositorBackendResult::None)
-				return FrameCompositorBackendResult::None;
+			if (fallbackResult == FrameCompositorBackendResult::NoFrameProduced) {
+				hasDirectPresentationFrame_ = false;
+				return FrameCompositorBackendResult::NoFrameProduced;
+			}
 			if (!loggedCpuFallback_) {
 				Log("{} using CPU pixel fallback for diagnostics", Name());
 				loggedCpuFallback_ = true;
 			}
-			if (!presenter_->PrepareOutputSurfaceFrame({ frame, lightingInputs_ }, outputSurface))
+			if (!presenter_->PrepareOutputSurfaceFrame({ frame, lightingInputs_ }, outputSurface)) {
+				hasDirectPresentationFrame_ = false;
 				return fallbackResult;
-			return FrameCompositorBackendResult::Presented;
+			}
+			hasDirectPresentationFrame_ = true;
+			return FrameCompositorBackendResult::PreparedDirectPresentation;
 		}
 
 		stats.selectedThreadCount = std::max(stats.selectedThreadCount, 1);
 		const CompositionLightingInputs *lightingInputs = LightingInputsForIndexedFrame(frame.logicalSize);
 		if (!presenter_->PrepareIndexedFrame({ frame, lightingInputs })) {
 			const FrameCompositorBackendResult fallbackResult = cpuFallback_->Compose(frame, outputSurface, rects, stats);
-			if (fallbackResult == FrameCompositorBackendResult::None)
-				return FrameCompositorBackendResult::None;
-			if (PresenterAvailable() && presenter_->PrepareOutputSurfaceFrame({ frame, lightingInputs_ }, outputSurface))
-				return FrameCompositorBackendResult::Presented;
+			if (fallbackResult == FrameCompositorBackendResult::NoFrameProduced) {
+				hasDirectPresentationFrame_ = false;
+				return FrameCompositorBackendResult::NoFrameProduced;
+			}
+			if (PresenterAvailable() && presenter_->PrepareOutputSurfaceFrame({ frame, lightingInputs_ }, outputSurface)) {
+				hasDirectPresentationFrame_ = true;
+				return FrameCompositorBackendResult::PreparedDirectPresentation;
+			}
+			hasDirectPresentationFrame_ = false;
 			return fallbackResult;
 		}
-		return FrameCompositorBackendResult::Presented;
+		hasDirectPresentationFrame_ = true;
+		return FrameCompositorBackendResult::PreparedDirectPresentation;
 	}
 
 	void Present() override
@@ -97,6 +117,7 @@ private:
 	std::unique_ptr<IFrameCompositorBackend> cpuFallback_;
 	const CompositionLightingInputs *lightingInputs_ = nullptr;
 	bool loggedCpuFallback_ = false;
+	bool hasDirectPresentationFrame_ = false;
 };
 
 } // namespace

@@ -10,6 +10,8 @@ Current-build Hellfire demo recorded on 2026-05-19 for repeatable render telemet
 
 ## Validated Baseline
 
+This fixture is also the approval baseline for the intentional CPU per-pixel lighting removal. The visual/product decision is to keep the current CPU renderer on classic tile light-table lighting and reserve higher-fidelity lighting for a future accelerated system rather than preserving the removed CPU lightmap path.
+
 The fixture was validated with `--demo 1 --timedemo`; compositor off, compositor on, and tint + outline diagnostic replays all ended with:
 
 ```text

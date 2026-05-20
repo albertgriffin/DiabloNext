@@ -41,6 +41,7 @@ set(tests
   frame_compositor_test
   render_layer_test
   render_perf_test
+  render_visual_regression_test
   panel_state_test
   store_transaction_test
   visual_store_test

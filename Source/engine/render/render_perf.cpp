@@ -170,6 +170,8 @@ std::string_view CompositionFullFrameReasonName(const CompositionFullFrameReason
 		return "index-buffer-changed";
 	case CompositionFullFrameReason::LogicalSizeChanged:
 		return "logical-size-changed";
+	case CompositionFullFrameReason::DirectPresentationUnavailable:
+		return "direct-presentation-unavailable";
 	}
 	return "unknown";
 }

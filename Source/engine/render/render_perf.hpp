@@ -61,6 +61,7 @@ enum class CompositionFullFrameReason : uint8_t {
 	OutputSurfaceChanged,
 	IndexBufferChanged,
 	LogicalSizeChanged,
+	DirectPresentationUnavailable,
 };
 
 struct RenderPerfCompositionStats {

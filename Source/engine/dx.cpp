@@ -268,8 +268,8 @@ void RenderPresent()
 		return;
 	}
 
-	const bool frameCompositorPresented = ComposeFrameToOutput(surface);
-	if (frameCompositorPresented) {
+	const bool frameCompositorPreparedDirectPresentation = ComposeFrameToOutput(surface);
+	if (frameCompositorPreparedDirectPresentation) {
 		{
 			RenderPerfScope renderPerfScope(RenderPerfPhase::Present);
 			PresentFrameComposition();
