@@ -323,7 +323,8 @@ bool AcceleratedPaletteFrameRequiresCpuPixels(const CompositionFrame &frame)
 {
 	return frame.diagnosticTransform
 	    || frame.renderLayerDiagnosticMode != RenderLayerDiagnosticMode::Off
-	    || frame.renderWorldMaskDiagnosticMode != RenderWorldMaskDiagnosticMode::Off;
+	    || frame.renderWorldMaskDiagnosticMode != RenderWorldMaskDiagnosticMode::Off
+	    || frame.renderWorldProxyDiagnosticMode != RenderWorldProxyDiagnosticMode::Off;
 }
 
 const CompositionLightingInputs *PrepareNeutralCompositionLightingInputs(const Size size)

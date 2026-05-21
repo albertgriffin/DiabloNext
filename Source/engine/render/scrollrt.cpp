@@ -8,6 +8,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #ifdef USE_SDL3
 #include <SDL3/SDL_keyboard.h>
@@ -34,6 +37,7 @@
 #include "engine/point.hpp"
 #include "engine/render/clx_render.hpp"
 #include "engine/render/dun_render.hpp"
+#include "engine/render/light_shadow_diagnostics.hpp"
 #include "engine/render/render_layer.hpp"
 #include "engine/render/render_perf.hpp"
 #include "engine/render/text_render.hpp"
@@ -121,6 +125,8 @@ constexpr auto RightFrameDisplacement = Displacement { DunFrameWidth, 0 };
 		return true;
 	if (*GetOptions().Experimental.renderWorldMaskDiagnosticMode != RenderWorldMaskDiagnosticMode::Off)
 		return true;
+	if (*GetOptions().Experimental.renderWorldProxyDiagnosticMode != RenderWorldProxyDiagnosticMode::Off)
+		return true;
 	return *GetOptions().Experimental.renderFrameCompositorBackend == RenderFrameCompositorBackend::SdlGpuPalette
 	    && *GetOptions().Experimental.renderLightShadowDiagnosticMode != RenderLightShadowDiagnosticMode::Off;
 }
@@ -129,6 +135,12 @@ constexpr auto RightFrameDisplacement = Displacement { DunFrameWidth, 0 };
 {
 	return *GetOptions().Experimental.renderFrameCompositor
 	    && *GetOptions().Experimental.renderWorldMaskDiagnosticMode != RenderWorldMaskDiagnosticMode::Off;
+}
+
+[[nodiscard]] bool RenderWorldProxyCaptureNeededForFrameComposition()
+{
+	return *GetOptions().Experimental.renderFrameCompositor
+	    && *GetOptions().Experimental.renderWorldProxyDiagnosticMode != RenderWorldProxyDiagnosticMode::Off;
 }
 
 [[nodiscard]] uint8_t ReceiverOccluder()
@@ -160,6 +172,63 @@ constexpr auto RightFrameDisplacement = Displacement { DunFrameWidth, 0 };
 		return leftHalf ? RenderWorldMaterial::LeftWall : RenderWorldMaterial::RightWall;
 	}
 	return RenderWorldMaterial::DoorArchBlocker;
+}
+
+[[nodiscard]] RenderWorldProxyPrimitive TileProxyPrimitive(const TileType tileType, const bool leftHalf)
+{
+	switch (tileType) {
+	case TileType::LeftTriangle:
+	case TileType::LeftTrapezoid:
+		return RenderWorldProxyPrimitive::LeftWallQuad;
+	case TileType::RightTriangle:
+	case TileType::RightTrapezoid:
+		return RenderWorldProxyPrimitive::RightWallQuad;
+	case TileType::Square:
+	case TileType::TransparentSquare:
+		return leftHalf ? RenderWorldProxyPrimitive::LeftWallQuad : RenderWorldProxyPrimitive::RightWallQuad;
+	}
+	return RenderWorldProxyPrimitive::DoorArchBlocker;
+}
+
+[[nodiscard]] Rectangle SpriteProxyBounds(const Point bottomLeft, const ClxSprite sprite)
+{
+	return { { bottomLeft.x, bottomLeft.y - static_cast<int>(sprite.height()) + 1 }, { static_cast<int>(sprite.width()), static_cast<int>(sprite.height()) } };
+}
+
+void RecordWorldProxyPrimitive(RenderWorldProxyPrimitive primitive, Rectangle bounds)
+{
+	if (CurrentRenderWorldProxyMapView().depthPixels == nullptr)
+		return;
+
+	RenderPerfScope renderPerfScope(RenderPerfPhase::WorldProxy, RenderPerfActive());
+	MarkRenderWorldProxyPrimitive(primitive, bounds);
+}
+
+void RecordWorldProxyFloorDiamond(Point position)
+{
+	if (CurrentRenderWorldProxyMapView().depthPixels == nullptr)
+		return;
+
+	RenderPerfScope renderPerfScope(RenderPerfPhase::WorldProxy, RenderPerfActive());
+	MarkRenderWorldProxyFloorDiamond(position);
+}
+
+void RecordWorldProxyTilePrimitive(RenderWorldProxyPrimitive primitive, Point position)
+{
+	if (CurrentRenderWorldProxyMapView().depthPixels == nullptr)
+		return;
+
+	RenderPerfScope renderPerfScope(RenderPerfPhase::WorldProxy, RenderPerfActive());
+	MarkRenderWorldProxyTilePrimitive(primitive, position);
+}
+
+void RecordWorldProxyActorBillboard(Rectangle bounds)
+{
+	if (CurrentRenderWorldProxyMapView().depthPixels == nullptr)
+		return;
+
+	RenderPerfScope renderPerfScope(RenderPerfPhase::WorldProxy, RenderPerfActive());
+	MarkRenderWorldProxyActorBillboard(bounds);
 }
 
 /**
@@ -431,6 +500,7 @@ void DrawMonster(const Surface &out, Point tilePosition, Point targetBufferPosit
 
 	const ClxSprite sprite = monster.animInfo.currentSprite();
 	RenderWorldMaskScope worldMask(RenderWorldMaterial::Actor, ReceiverOccluder());
+	RecordWorldProxyActorBillboard(SpriteProxyBounds(targetBufferPosition, sprite));
 
 	if (!IsTileLit(tilePosition)) {
 		ClxDrawTRN(out, targetBufferPosition, sprite, GetInfravisionTRN());
@@ -523,6 +593,7 @@ void DrawPlayer(const Surface &out, const Player &player, Point tilePosition, Po
 	const ClxSprite sprite = player.currentSprite();
 	const Point spriteBufferPosition = targetBufferPosition + player.getRenderingOffset(sprite);
 	RenderWorldMaskScope worldMask(RenderWorldMaterial::Actor, ReceiverOccluder());
+	RecordWorldProxyActorBillboard(SpriteProxyBounds(spriteBufferPosition, sprite));
 
 	if (&player == PlayerUnderCursor)
 		ClxDrawOutlineSkipColorZero(out, GetPlayerOutlineColor(player.getId()), spriteBufferPosition, sprite);
@@ -577,6 +648,7 @@ void DrawObject(const Surface &out, const Object &objectToDraw, Point tilePositi
 
 	const Point screenPosition = targetBufferPosition + objectToDraw.getRenderingOffset(sprite, tilePosition);
 	RenderWorldMaskScope worldMask(RenderWorldMaterial::Object, ReceiverOccluder());
+	RecordWorldProxyPrimitive(RenderWorldProxyPrimitive::ObjectBlocker, SpriteProxyBounds(screenPosition, sprite));
 
 	if (&objectToDraw == ObjectUnderCursor) {
 		ClxDrawOutlineSkipColorZero(out, OutlineColorsObject, screenPosition, sprite);
@@ -668,6 +740,7 @@ void DrawCell(const Surface &out, Point tilePosition, Point targetBufferPosition
 				    pDungeonCels.get(), levelCelBlock, foliageTbl);
 			} else {
 				RenderWorldMaskScope worldMask(TileMaterial(tileType, true), ReceiverOccluder());
+				RecordWorldProxyTilePrimitive(TileProxyPrimitive(tileType, true), targetBufferPosition);
 				RenderTile(out, targetBufferPosition,
 				    pDungeonCels.get(), levelCelBlock, getFirstTileMaskLeft(tileType), tbl);
 			}
@@ -682,6 +755,7 @@ void DrawCell(const Surface &out, Point tilePosition, Point targetBufferPosition
 				    pDungeonCels.get(), levelCelBlock, foliageTbl);
 			} else {
 				RenderWorldMaskScope worldMask(TileMaterial(tileType, false), ReceiverOccluder());
+				RecordWorldProxyTilePrimitive(TileProxyPrimitive(tileType, false), targetBufferPosition + RightFrameDisplacement);
 				RenderTile(out, targetBufferPosition + RightFrameDisplacement,
 				    pDungeonCels.get(), levelCelBlock, getFirstTileMaskRight(tileType), tbl);
 			}
@@ -694,6 +768,7 @@ void DrawCell(const Surface &out, Point tilePosition, Point targetBufferPosition
 			const LevelCelBlock levelCelBlock { pMap->mt[i] };
 			if (levelCelBlock.hasValue()) {
 				RenderWorldMaskScope worldMask(TileMaterial(levelCelBlock.type(), true), ReceiverOccluder());
+				RecordWorldProxyTilePrimitive(TileProxyPrimitive(levelCelBlock.type(), true), targetBufferPosition);
 				RenderTile(out, targetBufferPosition,
 				    pDungeonCels.get(), levelCelBlock,
 				    transparency ? MaskType::Transparent : MaskType::Solid, foliageTbl);
@@ -703,6 +778,7 @@ void DrawCell(const Surface &out, Point tilePosition, Point targetBufferPosition
 			const LevelCelBlock levelCelBlock { pMap->mt[i + 1] };
 			if (levelCelBlock.hasValue()) {
 				RenderWorldMaskScope worldMask(TileMaterial(levelCelBlock.type(), false), ReceiverOccluder());
+				RecordWorldProxyTilePrimitive(TileProxyPrimitive(levelCelBlock.type(), false), targetBufferPosition + RightFrameDisplacement);
 				RenderTile(out, targetBufferPosition + RightFrameDisplacement,
 				    pDungeonCels.get(), levelCelBlock,
 				    transparency ? MaskType::Transparent : MaskType::Solid, foliageTbl);
@@ -739,6 +815,10 @@ void DrawFloorTile(const Surface &out, Point tilePosition, Point targetBufferPos
 #endif
 
 	const uint16_t levelPieceId = dPiece[tilePosition.x][tilePosition.y];
+	const bool hasLeftFloor = LevelCelBlock { DPieceMicros[levelPieceId].mt[0] }.hasValue();
+	const bool hasRightFloor = LevelCelBlock { DPieceMicros[levelPieceId].mt[1] }.hasValue();
+	if (hasLeftFloor || hasRightFloor)
+		RecordWorldProxyFloorDiamond(targetBufferPosition);
 	{
 		const LevelCelBlock levelCelBlock { DPieceMicros[levelPieceId].mt[0] };
 		if (levelCelBlock.hasValue()) {
@@ -794,6 +874,7 @@ void DrawMonsterHelper(const Surface &out, Point tilePosition, Point targetBuffe
 		auto &towner = Towners[mi];
 		const Point position = targetBufferPosition + towner.getRenderingOffset();
 		const ClxSprite sprite = towner.currentSprite();
+		RecordWorldProxyActorBillboard(SpriteProxyBounds(position, sprite));
 		if (mi == pcursmonst) {
 			ClxDrawOutlineSkipColorZero(out, OutlineColorsTowner, position, sprite);
 		}
@@ -992,6 +1073,7 @@ void DrawDungeon(const Surface &out, Point tilePosition, Point targetBufferPosit
 			// Turn transparency off here for debugging
 			transparency = transparency && (SDL_GetModState() & SDL_KMOD_ALT) == 0;
 #endif
+			RecordWorldProxyTilePrimitive(RenderWorldProxyPrimitive::DoorArchBlocker, targetBufferPosition);
 			if (transparency) {
 				RenderWorldMaskScope worldMask(RenderWorldMaterial::DoorArchBlocker, ReceiverOccluder());
 				ClxDrawLightBlended(out, targetBufferPosition, (*pSpecialCels)[bArch], lightTableIndex);
@@ -1009,6 +1091,7 @@ void DrawDungeon(const Surface &out, Point tilePosition, Point targetBufferPosit
 			if (bArch >= 0) {
 				RenderPerfScope renderPerfScope(RenderPerfPhase::WorldTileSpecial, renderPerfActive);
 				RenderWorldMaskScope worldMask(RenderWorldMaterial::DoorArchBlocker, ReceiverOccluder());
+				RecordWorldProxyTilePrimitive(RenderWorldProxyPrimitive::DoorArchBlocker, targetBufferPosition + Displacement { 0, -TILE_HEIGHT });
 				ClxDraw(out, targetBufferPosition + Displacement { 0, -TILE_HEIGHT }, (*pSpecialCels)[bArch]);
 			}
 		}
@@ -1604,6 +1687,166 @@ void DrawFPS(const Surface &out)
 	DrawString(out, formatted, Point { 8, 8 }, { .flags = UiFlags::ColorRed });
 }
 
+[[nodiscard]] std::string_view RenderLayerDiagnosticModeLabel(const RenderLayerDiagnosticMode mode)
+{
+	switch (mode) {
+	case RenderLayerDiagnosticMode::Off:
+		return "OFF";
+	case RenderLayerDiagnosticMode::Tint:
+		return "TINT";
+	case RenderLayerDiagnosticMode::Outline:
+		return "OUTLINE";
+	case RenderLayerDiagnosticMode::TintAndOutline:
+		return "TINT+OUTLINE";
+	}
+	return "UNKNOWN";
+}
+
+[[nodiscard]] std::string_view RenderWorldMaskDiagnosticModeLabel(const RenderWorldMaskDiagnosticMode mode)
+{
+	switch (mode) {
+	case RenderWorldMaskDiagnosticMode::Off:
+		return "OFF";
+	case RenderWorldMaskDiagnosticMode::Material:
+		return "MATERIAL";
+	case RenderWorldMaskDiagnosticMode::Receiver:
+		return "RECEIVER";
+	case RenderWorldMaskDiagnosticMode::Occluder:
+		return "OCCLUDER";
+	case RenderWorldMaskDiagnosticMode::Emissive:
+		return "EMISSIVE";
+	}
+	return "UNKNOWN";
+}
+
+[[nodiscard]] std::string_view RenderWorldProxyDiagnosticModeLabel(const RenderWorldProxyDiagnosticMode mode)
+{
+	switch (mode) {
+	case RenderWorldProxyDiagnosticMode::Off:
+		return "OFF";
+	case RenderWorldProxyDiagnosticMode::Type:
+		return "TYPE";
+	case RenderWorldProxyDiagnosticMode::Coverage:
+		return "COVERAGE";
+	case RenderWorldProxyDiagnosticMode::Outline:
+		return "OUTLINE";
+	case RenderWorldProxyDiagnosticMode::Depth:
+		return "DEPTH";
+	case RenderWorldProxyDiagnosticMode::Height:
+		return "HEIGHT";
+	case RenderWorldProxyDiagnosticMode::Receiver:
+		return "RECEIVER";
+	case RenderWorldProxyDiagnosticMode::Occluder:
+		return "OCCLUDER";
+	}
+	return "UNKNOWN";
+}
+
+void AppendRenderLayerDiagnosticLegend(std::vector<std::string> &lines, RenderLayerDiagnosticMode mode)
+{
+	if (mode == RenderLayerDiagnosticMode::Off)
+		return;
+
+	lines.emplace_back("LAYER: WORLD GREEN, OVERLAY YELLOW, UI BLUE");
+	lines.emplace_back("CURSOR MAGENTA, DEBUG RED, UNKNOWN WHITE");
+}
+
+void AppendWorldMaskDiagnosticLegend(std::vector<std::string> &lines, RenderWorldMaskDiagnosticMode mode)
+{
+	switch (mode) {
+	case RenderWorldMaskDiagnosticMode::Material:
+		lines.emplace_back("MASK: FLOOR GREEN, WALLS BLUE/CYAN, DOOR YELLOW");
+		lines.emplace_back("ACTOR MAGENTA, OBJECT ORANGE, ITEM MINT");
+		break;
+	case RenderWorldMaskDiagnosticMode::Receiver:
+		lines.emplace_back("MASK: GREEN RECEIVES LIGHT, GRAY DOES NOT");
+		break;
+	case RenderWorldMaskDiagnosticMode::Occluder:
+		lines.emplace_back("MASK: BLUE OCCLUDES LIGHT, GRAY DOES NOT");
+		break;
+	case RenderWorldMaskDiagnosticMode::Emissive:
+		lines.emplace_back("MASK: ORANGE EMISSIVE, GRAY NOT EMISSIVE");
+		break;
+	case RenderWorldMaskDiagnosticMode::Off:
+		break;
+	}
+}
+
+void AppendWorldProxyDiagnosticLegend(std::vector<std::string> &lines, RenderWorldProxyDiagnosticMode mode)
+{
+	switch (mode) {
+	case RenderWorldProxyDiagnosticMode::Type:
+		lines.emplace_back("PROXY TYPE: FLOOR GREEN, L WALL RED, R WALL BLUE");
+		lines.emplace_back("DOOR YELLOW, OBJECT ORANGE, ACTOR MAGENTA");
+		break;
+	case RenderWorldProxyDiagnosticMode::Coverage:
+		lines.emplace_back("PROXY COVERAGE: GREEN HAS PROXY, RED MISSING");
+		break;
+	case RenderWorldProxyDiagnosticMode::Outline:
+		lines.emplace_back("PROXY OUTLINE: YELLOW EDGE, RED MISSING");
+		break;
+	case RenderWorldProxyDiagnosticMode::Depth:
+		lines.emplace_back("PROXY DEPTH: DARK UPPER/FAR, BRIGHT LOWER/NEAR");
+		break;
+	case RenderWorldProxyDiagnosticMode::Height:
+		lines.emplace_back("PROXY HEIGHT: BLUE LOW, PURPLE MID, RED HIGH");
+		break;
+	case RenderWorldProxyDiagnosticMode::Receiver:
+		lines.emplace_back("PROXY: GREEN RECEIVES LIGHT, GRAY DOES NOT");
+		break;
+	case RenderWorldProxyDiagnosticMode::Occluder:
+		lines.emplace_back("PROXY: BLUE OCCLUDES LIGHT, GRAY DOES NOT");
+		break;
+	case RenderWorldProxyDiagnosticMode::Off:
+		break;
+	}
+}
+
+void DrawRenderDiagnosticStatus(const Surface &out)
+{
+	const auto &experimental = GetOptions().Experimental;
+	std::vector<std::string> lines;
+
+	if (*experimental.renderFrameCompositorDiagnosticTransform)
+		lines.emplace_back("RENDER DIAG: COMPOSITOR RGB TRANSFORM");
+
+	const RenderLayerDiagnosticMode layerMode = *experimental.renderLayerDiagnosticMode;
+	if (layerMode != RenderLayerDiagnosticMode::Off) {
+		lines.emplace_back(StrCat("RENDER DIAG: LAYER ", RenderLayerDiagnosticModeLabel(layerMode)));
+		AppendRenderLayerDiagnosticLegend(lines, layerMode);
+	}
+
+	const RenderWorldMaskDiagnosticMode maskMode = *experimental.renderWorldMaskDiagnosticMode;
+	if (maskMode != RenderWorldMaskDiagnosticMode::Off) {
+		lines.emplace_back(StrCat("RENDER DIAG: WORLD MASK ", RenderWorldMaskDiagnosticModeLabel(maskMode)));
+		AppendWorldMaskDiagnosticLegend(lines, maskMode);
+	}
+
+	const RenderWorldProxyDiagnosticMode proxyMode = *experimental.renderWorldProxyDiagnosticMode;
+	if (proxyMode != RenderWorldProxyDiagnosticMode::Off) {
+		lines.emplace_back(StrCat("RENDER DIAG: WORLD PROXY ", RenderWorldProxyDiagnosticModeLabel(proxyMode),
+		    *experimental.renderWorldProxyActorOccluders ? " + ACTOR OCCLUDERS" : ""));
+		AppendWorldProxyDiagnosticLegend(lines, proxyMode);
+	}
+
+	const RenderLightShadowDiagnosticMode lightShadowMode = *experimental.renderLightShadowDiagnosticMode;
+	if (lightShadowMode != RenderLightShadowDiagnosticMode::Off) {
+		const bool activeBackend = *experimental.renderFrameCompositor && *experimental.renderFrameCompositorBackend == RenderFrameCompositorBackend::SdlGpuPalette;
+		lines.emplace_back(StrCat("RENDER DIAG: LIGHT/SHADOW ", RenderLightShadowDiagnosticModeName(lightShadowMode),
+		    activeBackend ? "" : " (SDL_GPU BACKEND REQUIRED)"));
+	}
+
+	if (lines.empty())
+		return;
+
+	const int lineHeight = 12;
+	const int yStart = *GetOptions().Graphics.showFPS ? 24 : 8;
+	RenderLayerScope renderLayer(RenderLayer::Debug, { { 8, yStart }, { 620, static_cast<int>(lines.size()) * lineHeight } });
+	for (size_t i = 0; i < lines.size(); i++) {
+		DrawString(out, lines[i], Point { 8, yStart + static_cast<int>(i) * lineHeight }, { .flags = UiFlags::ColorWhite | UiFlags::Outlined });
+	}
+}
+
 /**
  * @brief Update part of the screen from the back buffer
  */
@@ -1947,7 +2190,7 @@ void scrollrt_draw_game_screen()
 	const Surface &out = GlobalBackBuffer();
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::LayerCaptureSetup);
-		BeginRenderLayerFrame(out, RenderLayerCaptureNeededForFrameComposition(), RenderWorldMaskCaptureNeededForFrameComposition());
+		BeginRenderLayerFrame(out, RenderLayerCaptureNeededForFrameComposition(), RenderWorldMaskCaptureNeededForFrameComposition(), RenderWorldProxyCaptureNeededForFrameComposition(), *GetOptions().Experimental.renderWorldProxyActorOccluders);
 	}
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::CursorUndraw);
@@ -1959,6 +2202,10 @@ void scrollrt_draw_game_screen()
 		DrawCursor(out);
 	}
 	{
+		RenderPerfScope renderPerfScope(RenderPerfPhase::DebugDraw);
+		DrawRenderDiagnosticStatus(out);
+	}
+	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::DirtyBlit);
 		DrawMain(hgt, false, false, false, false, false);
 	}
@@ -1966,6 +2213,7 @@ void scrollrt_draw_game_screen()
 	const RenderLayerFrameStats &renderLayerStats = GetRenderLayerFrameStats();
 	SetRenderPerfLayerCaptureStats(renderLayerStats.stampedSpanCount, renderLayerStats.stampedPixelCount);
 	SetRenderPerfWorldMaskStats(renderLayerStats.worldMaskStampedSpanCount, renderLayerStats.worldMaskStampedPixelCount);
+	SetRenderPerfWorldProxyStats(renderLayerStats.worldProxyPrimitiveCount, renderLayerStats.worldProxyActorPrimitiveCount, renderLayerStats.worldProxyPixelCount);
 	RenderPresent();
 	EndRenderPerfFrame();
 }
@@ -2005,7 +2253,7 @@ void DrawAndBlit()
 	BeginRenderPerfFrame(*GetOptions().Experimental.renderPerformanceStats);
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::LayerCaptureSetup);
-		BeginRenderLayerFrame(out, RenderLayerCaptureNeededForFrameComposition(), RenderWorldMaskCaptureNeededForFrameComposition());
+		BeginRenderLayerFrame(out, RenderLayerCaptureNeededForFrameComposition(), RenderWorldMaskCaptureNeededForFrameComposition(), RenderWorldProxyCaptureNeededForFrameComposition(), *GetOptions().Experimental.renderWorldProxyActorOccluders);
 	}
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::CursorUndraw);
@@ -2064,6 +2312,7 @@ void DrawAndBlit()
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::DebugDraw);
 		DrawFPS(out);
+		DrawRenderDiagnosticStatus(out);
 	}
 
 	lua::GameDrawComplete();
@@ -2091,6 +2340,7 @@ void DrawAndBlit()
 	const RenderLayerFrameStats &renderLayerStats = GetRenderLayerFrameStats();
 	SetRenderPerfLayerCaptureStats(renderLayerStats.stampedSpanCount, renderLayerStats.stampedPixelCount);
 	SetRenderPerfWorldMaskStats(renderLayerStats.worldMaskStampedSpanCount, renderLayerStats.worldMaskStampedPixelCount);
+	SetRenderPerfWorldProxyStats(renderLayerStats.worldProxyPrimitiveCount, renderLayerStats.worldProxyActorPrimitiveCount, renderLayerStats.worldProxyPixelCount);
 	RenderPresent();
 	EndRenderPerfFrame();
 }

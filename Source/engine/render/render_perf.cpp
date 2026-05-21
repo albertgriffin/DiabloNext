@@ -114,6 +114,9 @@ void AccumulateFrame()
 	RollingStats.layerStampedPixelCount += CurrentFrame.layerStampedPixelCount;
 	RollingStats.worldMaskStampedSpanCount += CurrentFrame.worldMaskStampedSpanCount;
 	RollingStats.worldMaskStampedPixelCount += CurrentFrame.worldMaskStampedPixelCount;
+	RollingStats.worldProxyPrimitiveCount += CurrentFrame.worldProxyPrimitiveCount;
+	RollingStats.worldProxyActorPrimitiveCount += CurrentFrame.worldProxyActorPrimitiveCount;
+	RollingStats.worldProxyPixelCount += CurrentFrame.worldProxyPixelCount;
 }
 
 void LogRollingStats()
@@ -122,7 +125,7 @@ void LogRollingStats()
 	if (frames == 0)
 		return;
 
-	Log("RenderPerf frames={} avg_us cursor_undraw={} world={} interface={} cursor={} debug={} dirty_blit={} compose={} present={} world_detail setup={} lightmap={} floor={} tiles={} oob={} zoom={} overlay={} debug={} view_ui={} layer_setup={} tile_detail cell={} missile={} corpse={} object={} item={} player={} monster={} special={} dirty_rects submitted={} normalized={} composed={} dirty_area submitted={} normalized={} composed={} full_frames={} last_full_reason={} parallel_frames={} max_threads={} upload bytes={} rects={} skipped={} full={} failed={} last_upload_fallback={} backend_results no_frame={} cpu_surface={} direct_prepared={} direct_retained={} role_rects world={} world_overlay={} interface={} cursor={} diagnostic={} role_area world={} world_overlay={} interface={} cursor={} diagnostic={} layer_spans={} layer_pixels={} world_mask_spans={} world_mask_pixels={}",
+	Log("RenderPerf frames={} avg_us cursor_undraw={} world={} interface={} cursor={} debug={} dirty_blit={} compose={} present={} world_detail setup={} lightmap={} floor={} tiles={} oob={} zoom={} overlay={} debug={} view_ui={} layer_setup={} proxy={} tile_detail cell={} missile={} corpse={} object={} item={} player={} monster={} special={} dirty_rects submitted={} normalized={} composed={} dirty_area submitted={} normalized={} composed={} full_frames={} last_full_reason={} parallel_frames={} max_threads={} upload bytes={} rects={} skipped={} full={} failed={} last_upload_fallback={} backend_results no_frame={} cpu_surface={} direct_prepared={} direct_retained={} role_rects world={} world_overlay={} interface={} cursor={} diagnostic={} role_area world={} world_overlay={} interface={} cursor={} diagnostic={} layer_spans={} layer_pixels={} world_mask_spans={} world_mask_pixels={} world_proxy_primitives={} world_proxy_actor_primitives={} world_proxy_pixels={}",
 	    frames,
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::CursorUndraw)], frames),
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::WorldDraw)], frames),
@@ -142,6 +145,7 @@ void LogRollingStats()
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::WorldDebugOverlay)], frames),
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::ViewInterfaceDraw)], frames),
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::LayerCaptureSetup)], frames),
+	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::WorldProxy)], frames),
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::WorldTileCell)], frames),
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::WorldTileMissile)], frames),
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::WorldTileCorpse)], frames),
@@ -183,7 +187,10 @@ void LogRollingStats()
 	    Average(RollingStats.layerStampedSpanCount, frames),
 	    Average(RollingStats.layerStampedPixelCount, frames),
 	    Average(RollingStats.worldMaskStampedSpanCount, frames),
-	    Average(RollingStats.worldMaskStampedPixelCount, frames));
+	    Average(RollingStats.worldMaskStampedPixelCount, frames),
+	    Average(RollingStats.worldProxyPrimitiveCount, frames),
+	    Average(RollingStats.worldProxyActorPrimitiveCount, frames),
+	    Average(RollingStats.worldProxyPixelCount, frames));
 }
 
 } // namespace
@@ -223,6 +230,10 @@ std::string_view CompositionFullFrameReasonName(const CompositionFullFrameReason
 		return "world-mask-diagnostic-mode-changed";
 	case CompositionFullFrameReason::WorldMaskDiagnosticsRequested:
 		return "world-mask-diagnostics-requested";
+	case CompositionFullFrameReason::WorldProxyDiagnosticModeChanged:
+		return "world-proxy-diagnostic-mode-changed";
+	case CompositionFullFrameReason::WorldProxyDiagnosticsRequested:
+		return "world-proxy-diagnostics-requested";
 	}
 	return "unknown";
 }
@@ -327,6 +338,16 @@ void SetRenderPerfWorldMaskStats(const uint64_t stampedSpanCount, const uint64_t
 
 	CurrentFrame.worldMaskStampedSpanCount = stampedSpanCount;
 	CurrentFrame.worldMaskStampedPixelCount = stampedPixelCount;
+}
+
+void SetRenderPerfWorldProxyStats(const uint64_t primitiveCount, const uint64_t actorPrimitiveCount, const uint64_t pixelCount)
+{
+	if (!Active)
+		return;
+
+	CurrentFrame.worldProxyPrimitiveCount = primitiveCount;
+	CurrentFrame.worldProxyActorPrimitiveCount = actorPrimitiveCount;
+	CurrentFrame.worldProxyPixelCount = pixelCount;
 }
 
 RenderPerfScope::RenderPerfScope(const RenderPerfPhase phase)

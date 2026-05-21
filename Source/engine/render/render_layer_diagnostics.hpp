@@ -39,6 +39,27 @@ enum class RenderWorldMaskDiagnosticMode : uint8_t {
 	Emissive,
 };
 
+enum class RenderWorldProxyDiagnosticMode : uint8_t {
+	Off,
+	Depth,
+	Height,
+	Receiver,
+	Occluder,
+	Type,
+	Coverage,
+	Outline,
+};
+
+enum class RenderWorldProxyPrimitive : uint8_t {
+	FloorDiamond,
+	LeftWallQuad,
+	RightWallQuad,
+	DoorArchBlocker,
+	ObjectBlocker,
+	ActorBillboard,
+	Count,
+};
+
 inline constexpr uint8_t RenderWorldMaskReceiver = 1 << 0;
 inline constexpr uint8_t RenderWorldMaskOccluder = 1 << 1;
 inline constexpr uint8_t RenderWorldMaskEmissive = 1 << 2;
@@ -61,7 +82,20 @@ struct RenderWorldMaskMapView {
 	uint64_t version = 0;
 };
 
+struct RenderWorldProxyMapView {
+	const uint8_t *typePixels = nullptr;
+	const uint8_t *depthPixels = nullptr;
+	const uint8_t *heightPixels = nullptr;
+	const uint8_t *receiverPixels = nullptr;
+	const uint8_t *occluderPixels = nullptr;
+	int width = 0;
+	int height = 0;
+	int pitch = 0;
+	uint64_t version = 0;
+};
+
 inline constexpr uint8_t UnknownRenderLayerId = 0xFF;
 inline constexpr uint8_t UnknownRenderWorldMaterialId = static_cast<uint8_t>(RenderWorldMaterial::Unknown);
+inline constexpr uint8_t UnknownRenderWorldProxyPrimitiveId = 0xFF;
 
 } // namespace devilution

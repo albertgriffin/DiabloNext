@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "engine/surface.hpp"
+#include "levels/dun_tile.hpp"
 
 namespace devilution {
 namespace {
@@ -33,6 +34,8 @@ struct WorldMaskState {
 std::vector<WorldMaskState> WorldMaskStack;
 bool CaptureEnabled = false;
 bool WorldMaskCaptureEnabled = false;
+bool WorldProxyCaptureEnabled = false;
+bool WorldProxyActorOccludersEnabled = false;
 int CaptureSuspensionDepth = 0;
 CaptureBuffer ActiveBuffer;
 CaptureBuffer LayerMapBuffer;
@@ -44,6 +47,14 @@ std::vector<uint8_t> WorldOccluderMap;
 std::vector<uint8_t> WorldEmissiveMap;
 uint64_t NextWorldMaskVersion = 0;
 uint64_t CurrentWorldMaskVersion = 0;
+CaptureBuffer WorldProxyMapBuffer;
+std::vector<uint8_t> WorldProxyTypeMap;
+std::vector<uint8_t> WorldProxyDepthMap;
+std::vector<uint8_t> WorldProxyHeightMap;
+std::vector<uint8_t> WorldProxyReceiverMap;
+std::vector<uint8_t> WorldProxyOccluderMap;
+uint64_t NextWorldProxyVersion = 0;
+uint64_t CurrentWorldProxyVersion = 0;
 
 [[nodiscard]] size_t LayerIndex(const RenderLayer layer)
 {
@@ -124,6 +135,119 @@ void MarkWorldMaskSpan(const size_t index, const int width)
 	std::memset(WorldEmissiveMap.data() + index, emissive, static_cast<size_t>(width));
 	FrameStats.worldMaskStampedSpanCount++;
 	FrameStats.worldMaskStampedPixelCount += static_cast<uint64_t>(width);
+}
+
+[[nodiscard]] bool ShouldStampWorldProxy()
+{
+	return WorldProxyCaptureEnabled
+	    && ActiveBuffer.width > 0
+	    && ActiveBuffer.height > 0
+	    && WorldProxyTypeMap.size() == LayerMapSize()
+	    && WorldProxyDepthMap.size() == LayerMapSize()
+	    && WorldProxyHeightMap.size() == LayerMapSize()
+	    && WorldProxyReceiverMap.size() == LayerMapSize()
+	    && WorldProxyOccluderMap.size() == LayerMapSize();
+}
+
+[[nodiscard]] uint8_t ProxyDepthAtY(const int y)
+{
+	if (ActiveBuffer.height <= 1)
+		return 1;
+	return static_cast<uint8_t>(std::clamp(1 + y * 254 / (ActiveBuffer.height - 1), 1, 255));
+}
+
+[[nodiscard]] uint8_t ProxyHeightForPrimitive(const RenderWorldProxyPrimitive primitive)
+{
+	switch (primitive) {
+	case RenderWorldProxyPrimitive::FloorDiamond:
+		return 32;
+	case RenderWorldProxyPrimitive::ObjectBlocker:
+		return 128;
+	case RenderWorldProxyPrimitive::ActorBillboard:
+		return 160;
+	case RenderWorldProxyPrimitive::LeftWallQuad:
+	case RenderWorldProxyPrimitive::RightWallQuad:
+	case RenderWorldProxyPrimitive::DoorArchBlocker:
+		return 192;
+	case RenderWorldProxyPrimitive::Count:
+		break;
+	}
+	return 0;
+}
+
+[[nodiscard]] bool ProxyPrimitiveReceivesLight(const RenderWorldProxyPrimitive primitive)
+{
+	switch (primitive) {
+	case RenderWorldProxyPrimitive::FloorDiamond:
+	case RenderWorldProxyPrimitive::LeftWallQuad:
+	case RenderWorldProxyPrimitive::RightWallQuad:
+	case RenderWorldProxyPrimitive::DoorArchBlocker:
+	case RenderWorldProxyPrimitive::ObjectBlocker:
+		return true;
+	case RenderWorldProxyPrimitive::ActorBillboard:
+	case RenderWorldProxyPrimitive::Count:
+		return false;
+	}
+	return false;
+}
+
+[[nodiscard]] bool ProxyPrimitiveOccludesLight(const RenderWorldProxyPrimitive primitive)
+{
+	switch (primitive) {
+	case RenderWorldProxyPrimitive::FloorDiamond:
+		return false;
+	case RenderWorldProxyPrimitive::LeftWallQuad:
+	case RenderWorldProxyPrimitive::RightWallQuad:
+	case RenderWorldProxyPrimitive::DoorArchBlocker:
+	case RenderWorldProxyPrimitive::ObjectBlocker:
+		return true;
+	case RenderWorldProxyPrimitive::ActorBillboard:
+		return WorldProxyActorOccludersEnabled;
+	case RenderWorldProxyPrimitive::Count:
+		break;
+	}
+	return false;
+}
+
+void StampWorldProxySpan(const int xBegin, const int y, const int width, const RenderWorldProxyPrimitive primitive)
+{
+	if (!ShouldStampWorldProxy() || y < 0 || y >= ActiveBuffer.height || width <= 0)
+		return;
+
+	int clippedX = xBegin;
+	int clippedWidth = width;
+	if (clippedX < 0) {
+		clippedWidth += clippedX;
+		clippedX = 0;
+	}
+	if (clippedX + clippedWidth > ActiveBuffer.width)
+		clippedWidth = ActiveBuffer.width - clippedX;
+	if (clippedWidth <= 0)
+		return;
+
+	const uint8_t depth = ProxyDepthAtY(y);
+	const uint8_t height = ProxyHeightForPrimitive(primitive);
+	const uint8_t receiver = ProxyPrimitiveReceivesLight(primitive) ? 255 : 0;
+	const uint8_t occluder = ProxyPrimitiveOccludesLight(primitive) ? 255 : 0;
+	const size_t index = static_cast<size_t>(y) * ActiveBuffer.width + clippedX;
+	std::memset(WorldProxyTypeMap.data() + index, static_cast<uint8_t>(primitive), static_cast<size_t>(clippedWidth));
+	std::memset(WorldProxyDepthMap.data() + index, depth, static_cast<size_t>(clippedWidth));
+	std::memset(WorldProxyHeightMap.data() + index, height, static_cast<size_t>(clippedWidth));
+	std::memset(WorldProxyReceiverMap.data() + index, receiver, static_cast<size_t>(clippedWidth));
+	std::memset(WorldProxyOccluderMap.data() + index, occluder, static_cast<size_t>(clippedWidth));
+	FrameStats.worldProxyPixelCount += static_cast<uint64_t>(clippedWidth);
+}
+
+void StampWorldProxyRectangle(Rectangle rect, const RenderWorldProxyPrimitive primitive)
+{
+	if (!ShouldStampWorldProxy() || rect.size.width <= 0 || rect.size.height <= 0)
+		return;
+
+	const int yBegin = std::clamp(rect.position.y, 0, ActiveBuffer.height);
+	const int yEnd = std::clamp(rect.position.y + rect.size.height, 0, ActiveBuffer.height);
+	for (int y = yBegin; y < yEnd; y++) {
+		StampWorldProxySpan(rect.position.x, y, rect.size.width, primitive);
+	}
 }
 
 [[nodiscard]] bool TryGetLayerMapSpan(const uint8_t *dst, int width, size_t &index, int &clippedWidth)
@@ -275,6 +399,24 @@ RenderWorldMaskMapView CurrentRenderWorldMaskMapView()
 	};
 }
 
+RenderWorldProxyMapView CurrentRenderWorldProxyMapView()
+{
+	if (!WorldProxyCaptureEnabled || WorldProxyTypeMap.empty() || WorldProxyDepthMap.empty())
+		return {};
+
+	return {
+		WorldProxyTypeMap.data(),
+		WorldProxyDepthMap.data(),
+		WorldProxyHeightMap.data(),
+		WorldProxyReceiverMap.data(),
+		WorldProxyOccluderMap.data(),
+		ActiveBuffer.width,
+		ActiveBuffer.height,
+		ActiveBuffer.width,
+		CurrentWorldProxyVersion,
+	};
+}
+
 void ResetRenderLayerFrameStats()
 {
 	FrameStats = {};
@@ -282,6 +424,8 @@ void ResetRenderLayerFrameStats()
 	WorldMaskStack.clear();
 	CaptureEnabled = false;
 	WorldMaskCaptureEnabled = false;
+	WorldProxyCaptureEnabled = false;
+	WorldProxyActorOccludersEnabled = false;
 	CaptureSuspensionDepth = 0;
 	RefreshCaptureActive();
 	ActiveBuffer = {};
@@ -293,16 +437,25 @@ void ResetRenderLayerFrameStats()
 	WorldOccluderMap.clear();
 	WorldEmissiveMap.clear();
 	CurrentWorldMaskVersion = 0;
+	WorldProxyMapBuffer = {};
+	WorldProxyTypeMap.clear();
+	WorldProxyDepthMap.clear();
+	WorldProxyHeightMap.clear();
+	WorldProxyReceiverMap.clear();
+	WorldProxyOccluderMap.clear();
+	CurrentWorldProxyVersion = 0;
 }
 
-void BeginRenderLayerFrame(const Surface &surface, const bool captureEnabled, const bool worldMaskCaptureEnabled)
+void BeginRenderLayerFrame(const Surface &surface, const bool captureEnabled, const bool worldMaskCaptureEnabled, const bool worldProxyCaptureEnabled, const bool worldProxyActorOccludersEnabled)
 {
 	FrameStats = {};
 	LayerStack.clear();
 	WorldMaskStack.clear();
 	CaptureSuspensionDepth = 0;
 	WorldMaskCaptureEnabled = worldMaskCaptureEnabled && surface.surface != nullptr && surface.w() > 0 && surface.h() > 0;
-	CaptureEnabled = (captureEnabled || WorldMaskCaptureEnabled) && surface.surface != nullptr && surface.w() > 0 && surface.h() > 0;
+	WorldProxyCaptureEnabled = worldProxyCaptureEnabled && surface.surface != nullptr && surface.w() > 0 && surface.h() > 0;
+	WorldProxyActorOccludersEnabled = worldProxyActorOccludersEnabled;
+	CaptureEnabled = (captureEnabled || WorldMaskCaptureEnabled || WorldProxyCaptureEnabled) && surface.surface != nullptr && surface.w() > 0 && surface.h() > 0;
 	RefreshCaptureActive();
 	if (!CaptureEnabled) {
 		ActiveBuffer = {};
@@ -313,6 +466,12 @@ void BeginRenderLayerFrame(const Surface &surface, const bool captureEnabled, co
 		WorldReceiverMap.clear();
 		WorldOccluderMap.clear();
 		WorldEmissiveMap.clear();
+		WorldProxyMapBuffer = {};
+		WorldProxyTypeMap.clear();
+		WorldProxyDepthMap.clear();
+		WorldProxyHeightMap.clear();
+		WorldProxyReceiverMap.clear();
+		WorldProxyOccluderMap.clear();
 		return;
 	}
 
@@ -335,16 +494,42 @@ void BeginRenderLayerFrame(const Surface &surface, const bool captureEnabled, co
 		WorldReceiverMap.clear();
 		WorldOccluderMap.clear();
 		WorldEmissiveMap.clear();
+	}
+	if (WorldMaskCaptureEnabled) {
+		CurrentWorldMaskVersion = ++NextWorldMaskVersion;
+		if (!SameCaptureBuffer(ActiveBuffer, WorldMaskMapBuffer) || WorldMaterialMap.size() != layerMapSize) {
+			WorldMaterialMap.assign(layerMapSize, UnknownRenderWorldMaterialId);
+			WorldReceiverMap.assign(layerMapSize, 0);
+			WorldOccluderMap.assign(layerMapSize, 0);
+			WorldEmissiveMap.assign(layerMapSize, 0);
+			WorldMaskMapBuffer = ActiveBuffer;
+		}
+	}
+
+	if (!WorldProxyCaptureEnabled) {
+		WorldProxyMapBuffer = {};
+		WorldProxyTypeMap.clear();
+		WorldProxyDepthMap.clear();
+		WorldProxyHeightMap.clear();
+		WorldProxyReceiverMap.clear();
+		WorldProxyOccluderMap.clear();
 		return;
 	}
 
-	CurrentWorldMaskVersion = ++NextWorldMaskVersion;
-	if (!SameCaptureBuffer(ActiveBuffer, WorldMaskMapBuffer) || WorldMaterialMap.size() != layerMapSize) {
-		WorldMaterialMap.assign(layerMapSize, UnknownRenderWorldMaterialId);
-		WorldReceiverMap.assign(layerMapSize, 0);
-		WorldOccluderMap.assign(layerMapSize, 0);
-		WorldEmissiveMap.assign(layerMapSize, 0);
-		WorldMaskMapBuffer = ActiveBuffer;
+	CurrentWorldProxyVersion = ++NextWorldProxyVersion;
+	if (!SameCaptureBuffer(ActiveBuffer, WorldProxyMapBuffer) || WorldProxyDepthMap.size() != layerMapSize) {
+		WorldProxyTypeMap.assign(layerMapSize, UnknownRenderWorldProxyPrimitiveId);
+		WorldProxyDepthMap.assign(layerMapSize, 0);
+		WorldProxyHeightMap.assign(layerMapSize, 0);
+		WorldProxyReceiverMap.assign(layerMapSize, 0);
+		WorldProxyOccluderMap.assign(layerMapSize, 0);
+		WorldProxyMapBuffer = ActiveBuffer;
+	} else {
+		std::fill(WorldProxyTypeMap.begin(), WorldProxyTypeMap.end(), UnknownRenderWorldProxyPrimitiveId);
+		std::fill(WorldProxyDepthMap.begin(), WorldProxyDepthMap.end(), 0);
+		std::fill(WorldProxyHeightMap.begin(), WorldProxyHeightMap.end(), 0);
+		std::fill(WorldProxyReceiverMap.begin(), WorldProxyReceiverMap.end(), 0);
+		std::fill(WorldProxyOccluderMap.begin(), WorldProxyOccluderMap.end(), 0);
 	}
 }
 
@@ -383,6 +568,43 @@ void EndRenderWorldMask(const RenderWorldMaterial material)
 	assert(!WorldMaskStack.empty());
 	assert(WorldMaskStack.back().material == material);
 	WorldMaskStack.pop_back();
+}
+
+void MarkRenderWorldProxyPrimitive(const RenderWorldProxyPrimitive primitive, const Rectangle bounds)
+{
+	if (!ShouldStampWorldProxy())
+		return;
+	if (primitive == RenderWorldProxyPrimitive::ActorBillboard && !WorldProxyActorOccludersEnabled)
+		return;
+
+	FrameStats.worldProxyPrimitiveCount++;
+	if (primitive == RenderWorldProxyPrimitive::ActorBillboard)
+		FrameStats.worldProxyActorPrimitiveCount++;
+	StampWorldProxyRectangle(bounds, primitive);
+}
+
+void MarkRenderWorldProxyFloorDiamond(const Point position)
+{
+	if (!ShouldStampWorldProxy())
+		return;
+
+	FrameStats.worldProxyPrimitiveCount++;
+	const int top = position.y - TILE_HEIGHT + 1;
+	const int centerX = position.x + TILE_WIDTH / 2;
+	for (int row = 0; row < TILE_HEIGHT; row++) {
+		const int rowWidth = row < TILE_HEIGHT / 2 ? (row + 1) * 4 : (TILE_HEIGHT - row) * 4;
+		StampWorldProxySpan(centerX - rowWidth / 2, top + row, rowWidth, RenderWorldProxyPrimitive::FloorDiamond);
+	}
+}
+
+void MarkRenderWorldProxyTilePrimitive(const RenderWorldProxyPrimitive primitive, const Point position)
+{
+	MarkRenderWorldProxyPrimitive(primitive, { { position.x, position.y - TILE_HEIGHT + 1 }, { DunFrameWidth, TILE_HEIGHT } });
+}
+
+void MarkRenderWorldProxyActorBillboard(const Rectangle bounds)
+{
+	MarkRenderWorldProxyPrimitive(RenderWorldProxyPrimitive::ActorBillboard, bounds);
 }
 
 void RecordRenderLayerDirtyRect(const RenderLayer layer)

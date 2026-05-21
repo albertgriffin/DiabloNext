@@ -40,6 +40,9 @@ struct RenderLayerFrameStats {
 	uint64_t stampedPixelCount = 0;
 	uint64_t worldMaskStampedSpanCount = 0;
 	uint64_t worldMaskStampedPixelCount = 0;
+	uint64_t worldProxyPrimitiveCount = 0;
+	uint64_t worldProxyActorPrimitiveCount = 0;
+	uint64_t worldProxyPixelCount = 0;
 };
 
 [[nodiscard]] RenderLayer CurrentRenderLayer();
@@ -48,13 +51,18 @@ struct RenderLayerFrameStats {
 [[nodiscard]] const RenderLayerFrameStats &GetRenderLayerFrameStats();
 [[nodiscard]] RenderLayerMapView CurrentRenderLayerMapView();
 [[nodiscard]] RenderWorldMaskMapView CurrentRenderWorldMaskMapView();
+[[nodiscard]] RenderWorldProxyMapView CurrentRenderWorldProxyMapView();
 void ResetRenderLayerFrameStats();
-void BeginRenderLayerFrame(const Surface &surface, bool captureEnabled, bool worldMaskCaptureEnabled = false);
+void BeginRenderLayerFrame(const Surface &surface, bool captureEnabled, bool worldMaskCaptureEnabled = false, bool worldProxyCaptureEnabled = false, bool worldProxyActorOccludersEnabled = false);
 void BeginRenderLayer(RenderLayer layer);
 void BeginRenderLayer(RenderLayer layer, Rectangle captureBounds);
 void EndRenderLayer(RenderLayer layer);
 void BeginRenderWorldMask(RenderWorldMaterial material, uint8_t flags);
 void EndRenderWorldMask(RenderWorldMaterial material);
+void MarkRenderWorldProxyPrimitive(RenderWorldProxyPrimitive primitive, Rectangle bounds);
+void MarkRenderWorldProxyFloorDiamond(Point position);
+void MarkRenderWorldProxyTilePrimitive(RenderWorldProxyPrimitive primitive, Point position);
+void MarkRenderWorldProxyActorBillboard(Rectangle bounds);
 void RecordRenderLayerDirtyRect(RenderLayer layer);
 [[nodiscard]] bool SaveRenderLayerMapRegion(Rectangle rect, uint8_t *destination, int destinationPitch);
 bool RestoreRenderLayerMapRegion(Rectangle rect, const uint8_t *source, int sourcePitch);

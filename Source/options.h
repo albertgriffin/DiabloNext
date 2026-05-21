@@ -577,6 +577,10 @@ struct ExperimentalOptions : OptionCategoryBase {
 	OptionEntryEnum<RenderLightShadowDiagnosticMode> renderLightShadowDiagnosticMode;
 	/** @brief Visualize world material, receiver, occluder, and emissive masks. */
 	OptionEntryEnum<RenderWorldMaskDiagnosticMode> renderWorldMaskDiagnosticMode;
+	/** @brief Visualize proxy depth, height, receiver, and occluder maps. */
+	OptionEntryEnum<RenderWorldProxyDiagnosticMode> renderWorldProxyDiagnosticMode;
+	/** @brief Include actor billboard occluders in proxy maps. */
+	OptionEntryBoolean renderWorldProxyActorOccluders;
 	/** @brief Log renderer performance telemetry. */
 	OptionEntryBoolean renderPerformanceStats;
 };

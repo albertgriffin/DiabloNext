@@ -857,6 +857,18 @@ ExperimentalOptions::ExperimentalOptions()
               { RenderWorldMaskDiagnosticMode::Occluder, N_("Occluder") },
               { RenderWorldMaskDiagnosticMode::Emissive, N_("Emissive") },
           })
+    , renderWorldProxyDiagnosticMode("Render World Proxy Diagnostic", OptionEntryFlags::None, N_("Render World Proxy Diagnostic"), N_("Visualize coarse proxy type, coverage, outline, depth, height, receiver, and occluder maps in the experimental frame compositor."), RenderWorldProxyDiagnosticMode::Off,
+          {
+              { RenderWorldProxyDiagnosticMode::Off, N_("Off") },
+              { RenderWorldProxyDiagnosticMode::Type, N_("Type") },
+              { RenderWorldProxyDiagnosticMode::Coverage, N_("Coverage") },
+              { RenderWorldProxyDiagnosticMode::Outline, N_("Outline") },
+              { RenderWorldProxyDiagnosticMode::Depth, N_("Depth") },
+              { RenderWorldProxyDiagnosticMode::Height, N_("Height") },
+              { RenderWorldProxyDiagnosticMode::Receiver, N_("Receiver") },
+              { RenderWorldProxyDiagnosticMode::Occluder, N_("Occluder") },
+          })
+    , renderWorldProxyActorOccluders("Render World Proxy Actor Occluders", OptionEntryFlags::None, N_("Render World Proxy Actor Occluders"), N_("Include actor billboard occluders in experimental world proxy diagnostics."), false)
     , renderPerformanceStats("Render Performance Stats", OptionEntryFlags::None, N_("Render Performance Stats"), N_("Log renderer performance telemetry once per second."), false)
 {
 }
@@ -870,6 +882,8 @@ std::vector<OptionEntryBase *> ExperimentalOptions::GetEntries()
 		&renderLayerDiagnosticMode,
 		&renderLightShadowDiagnosticMode,
 		&renderWorldMaskDiagnosticMode,
+		&renderWorldProxyDiagnosticMode,
+		&renderWorldProxyActorOccluders,
 		&renderPerformanceStats,
 	};
 }

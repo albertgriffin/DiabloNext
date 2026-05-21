@@ -137,6 +137,8 @@ struct CompositionFrame {
 	std::vector<CompositionAttachment> attachments;
 	RenderWorldMaskMapView worldMaskMap;
 	RenderWorldMaskDiagnosticMode renderWorldMaskDiagnosticMode = RenderWorldMaskDiagnosticMode::Off;
+	RenderWorldProxyMapView worldProxyMap;
+	RenderWorldProxyDiagnosticMode renderWorldProxyDiagnosticMode = RenderWorldProxyDiagnosticMode::Off;
 };
 
 enum class FrameCompositorBackendResult : uint8_t {
@@ -223,11 +225,14 @@ private:
 	RenderLayerMapView renderLayerMap_ {};
 	RenderWorldMaskMapView worldMaskMap_ {};
 	RenderWorldMaskDiagnosticMode renderWorldMaskDiagnosticMode_ = RenderWorldMaskDiagnosticMode::Off;
+	RenderWorldProxyMapView worldProxyMap_ {};
+	RenderWorldProxyDiagnosticMode renderWorldProxyDiagnosticMode_ = RenderWorldProxyDiagnosticMode::Off;
 	bool hasComposedFrame_ = false;
 	uint64_t lastComposedPaletteVersion_ = 0;
 	bool lastComposedDiagnosticTransformEnabled_ = false;
 	RenderLayerDiagnosticMode lastRenderLayerDiagnosticMode_ = RenderLayerDiagnosticMode::Off;
 	RenderWorldMaskDiagnosticMode lastRenderWorldMaskDiagnosticMode_ = RenderWorldMaskDiagnosticMode::Off;
+	RenderWorldProxyDiagnosticMode lastRenderWorldProxyDiagnosticMode_ = RenderWorldProxyDiagnosticMode::Off;
 	bool outputSurfaceChangedSinceComposition_ = false;
 	bool indexBufferChangedSinceComposition_ = false;
 	bool logicalSizeChangedSinceComposition_ = false;

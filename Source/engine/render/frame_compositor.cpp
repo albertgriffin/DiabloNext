@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstring>
 #include <memory>
+#include <utility>
 
 #if defined(WINVER) && WINVER <= 0x0500 && (!defined(_WIN32_WINNT) || _WIN32_WINNT == 0)
 #define DEVILUTIONX_LEGACY_WINDOWS_9X 1
@@ -55,6 +56,7 @@ constexpr size_t MaxDirtyRectsBeforeFullFrame = 64;
 constexpr size_t RenderLayerDiagnosticColorCount = RenderLayerCount + 1;
 constexpr size_t UnknownRenderLayerDiagnosticColorIndex = RenderLayerCount;
 constexpr size_t RenderWorldMaterialColorCount = static_cast<size_t>(RenderWorldMaterial::Count);
+constexpr size_t RenderWorldProxyPrimitiveColorCount = static_cast<size_t>(RenderWorldProxyPrimitive::Count) + 1;
 #if DEVILUTIONX_PARALLEL_COMPOSITION
 constexpr int MinParallelCompositionPixels = 96 * 1024;
 constexpr int MinParallelCompositionRowsPerThread = 64;
@@ -304,6 +306,19 @@ void UpsertCompositionAttachment(std::vector<CompositionAttachment> &attachments
 	    && frame.worldMaskMap.pitch >= frame.worldMaskMap.width;
 }
 
+[[nodiscard]] bool WorldProxyDiagnosticEnabled(const CompositionFrame &frame)
+{
+	return frame.renderWorldProxyDiagnosticMode != RenderWorldProxyDiagnosticMode::Off
+	    && frame.worldProxyMap.typePixels != nullptr
+	    && frame.worldProxyMap.depthPixels != nullptr
+	    && frame.worldProxyMap.heightPixels != nullptr
+	    && frame.worldProxyMap.receiverPixels != nullptr
+	    && frame.worldProxyMap.occluderPixels != nullptr
+	    && frame.worldProxyMap.width > 0
+	    && frame.worldProxyMap.height > 0
+	    && frame.worldProxyMap.pitch >= frame.worldProxyMap.width;
+}
+
 [[nodiscard]] bool IsWorldLayerPixel(const RenderLayerMapView &layerMap, const int x, const int y)
 {
 	if (layerMap.pixels == nullptr || x < 0 || y < 0 || x >= layerMap.width || y >= layerMap.height)
@@ -375,11 +390,44 @@ void UpsertCompositionAttachment(std::vector<CompositionAttachment> &attachments
 	return { 64, 64, 64 };
 }
 
+[[nodiscard]] RgbColor RenderWorldProxyPrimitiveDiagnosticColor(const uint8_t primitiveId)
+{
+	switch (static_cast<RenderWorldProxyPrimitive>(primitiveId)) {
+	case RenderWorldProxyPrimitive::FloorDiamond:
+		return { 64, 255, 96 };
+	case RenderWorldProxyPrimitive::LeftWallQuad:
+		return { 255, 80, 80 };
+	case RenderWorldProxyPrimitive::RightWallQuad:
+		return { 80, 160, 255 };
+	case RenderWorldProxyPrimitive::DoorArchBlocker:
+		return { 255, 208, 64 };
+	case RenderWorldProxyPrimitive::ObjectBlocker:
+		return { 255, 128, 48 };
+	case RenderWorldProxyPrimitive::ActorBillboard:
+		return { 224, 64, 255 };
+	case RenderWorldProxyPrimitive::Count:
+		break;
+	}
+	return { 32, 32, 32 };
+}
+
+[[nodiscard]] RgbColor GrayscaleDiagnosticColor(const uint8_t value)
+{
+	return { value, value, value };
+}
+
 [[nodiscard]] size_t RenderWorldMaterialColorIndex(const uint8_t materialId)
 {
 	if (materialId < static_cast<uint8_t>(RenderWorldMaterial::Count))
 		return materialId;
 	return static_cast<size_t>(RenderWorldMaterial::Unknown);
+}
+
+[[nodiscard]] size_t RenderWorldProxyPrimitiveColorIndex(const uint8_t primitiveId)
+{
+	if (primitiveId < static_cast<uint8_t>(RenderWorldProxyPrimitive::Count))
+		return primitiveId;
+	return static_cast<size_t>(RenderWorldProxyPrimitive::Count);
 }
 
 [[nodiscard]] bool WorldMaskMapContains(const RenderWorldMaskMapView &map, const int x, const int y)
@@ -390,6 +438,48 @@ void UpsertCompositionAttachment(std::vector<CompositionAttachment> &attachments
 	    && x < map.width
 	    && y < map.height
 	    && map.pitch >= map.width;
+}
+
+[[nodiscard]] bool WorldProxyMapContains(const RenderWorldProxyMapView &map, const int x, const int y)
+{
+	return map.typePixels != nullptr
+	    && map.depthPixels != nullptr
+	    && x >= 0
+	    && y >= 0
+	    && x < map.width
+	    && y < map.height
+	    && map.pitch >= map.width;
+}
+
+[[nodiscard]] bool WorldProxyHasPixel(const RenderWorldProxyMapView &map, const int x, const int y)
+{
+	if (!WorldProxyMapContains(map, x, y))
+		return false;
+	return map.typePixels[static_cast<size_t>(y) * map.pitch + x] != UnknownRenderWorldProxyPrimitiveId;
+}
+
+[[nodiscard]] bool WorldProxyEdgePixel(const RenderWorldProxyMapView &map, const int x, const int y)
+{
+	if (!WorldProxyHasPixel(map, x, y))
+		return false;
+
+	const size_t offset = static_cast<size_t>(y) * map.pitch + x;
+	const uint8_t type = map.typePixels[offset];
+	constexpr std::array<std::pair<int, int>, 4> Neighbors {
+		std::pair { -1, 0 },
+		std::pair { 1, 0 },
+		std::pair { 0, -1 },
+		std::pair { 0, 1 },
+	};
+	for (const auto [deltaX, deltaY] : Neighbors) {
+		const Point position { x + deltaX, y + deltaY };
+		if (!WorldProxyHasPixel(map, position.x, position.y))
+			return true;
+		const size_t neighborOffset = static_cast<size_t>(position.y) * map.pitch + position.x;
+		if (map.typePixels[neighborOffset] != type)
+			return true;
+	}
+	return false;
 }
 
 [[nodiscard]] uint32_t WorldMaskDiagnosticPixel(const CompositionFrame &frame, const SDL_Surface &outputSurface, const int x, const int y, const std::array<uint32_t, RenderWorldMaterialColorCount> &mappedMaterialColors)
@@ -408,6 +498,43 @@ void UpsertCompositionAttachment(std::vector<CompositionAttachment> &attachments
 	case RenderWorldMaskDiagnosticMode::Emissive:
 		return MapRgba(outputSurface, frame.worldMaskMap.emissivePixels != nullptr && frame.worldMaskMap.emissivePixels[offset] != 0 ? RgbColor { 255, 144, 48 } : RgbColor { 32, 32, 32 });
 	case RenderWorldMaskDiagnosticMode::Off:
+		break;
+	}
+	return 0;
+}
+
+[[nodiscard]] uint32_t WorldProxyDiagnosticPixel(
+    const CompositionFrame &frame,
+    const SDL_Surface &outputSurface,
+    const int x,
+    const int y,
+    const std::array<uint32_t, RenderWorldProxyPrimitiveColorCount> &mappedProxyPrimitiveColors)
+{
+	if (!WorldProxyMapContains(frame.worldProxyMap, x, y) || !IsWorldLayerPixel(frame.renderLayerMap, x, y))
+		return 0;
+
+	const size_t offset = static_cast<size_t>(y) * frame.worldProxyMap.pitch + x;
+	const bool hasProxy = frame.worldProxyMap.typePixels[offset] != UnknownRenderWorldProxyPrimitiveId;
+	switch (frame.renderWorldProxyDiagnosticMode) {
+	case RenderWorldProxyDiagnosticMode::Type:
+		return mappedProxyPrimitiveColors[RenderWorldProxyPrimitiveColorIndex(frame.worldProxyMap.typePixels[offset])];
+	case RenderWorldProxyDiagnosticMode::Coverage:
+		return MapRgba(outputSurface, hasProxy ? RgbColor { 64, 255, 96 } : RgbColor { 255, 64, 64 });
+	case RenderWorldProxyDiagnosticMode::Outline:
+		if (!hasProxy)
+			return MapRgba(outputSurface, { 255, 64, 64 });
+		if (WorldProxyEdgePixel(frame.worldProxyMap, x, y))
+			return MapRgba(outputSurface, { 255, 240, 64 });
+		return 0;
+	case RenderWorldProxyDiagnosticMode::Depth:
+		return MapRgba(outputSurface, GrayscaleDiagnosticColor(frame.worldProxyMap.depthPixels[offset]));
+	case RenderWorldProxyDiagnosticMode::Height:
+		return MapRgba(outputSurface, { frame.worldProxyMap.heightPixels[offset], 64, static_cast<uint8_t>(255 - frame.worldProxyMap.heightPixels[offset]) });
+	case RenderWorldProxyDiagnosticMode::Receiver:
+		return MapRgba(outputSurface, frame.worldProxyMap.receiverPixels[offset] != 0 ? RgbColor { 64, 255, 96 } : RgbColor { 32, 32, 32 });
+	case RenderWorldProxyDiagnosticMode::Occluder:
+		return MapRgba(outputSurface, frame.worldProxyMap.occluderPixels[offset] != 0 ? RgbColor { 64, 160, 255 } : RgbColor { 32, 32, 32 });
+	case RenderWorldProxyDiagnosticMode::Off:
 		break;
 	}
 	return 0;
@@ -633,6 +760,44 @@ void UpsertWorldMaskAttachments(std::vector<CompositionAttachment> &attachments,
 	UpsertCompositionAttachment(attachments, MakeWorldMaskAttachment(CompositionAttachmentRole::WorldOccluder, map.occluderPixels, map, logicalSize, dirtyRects));
 }
 
+[[nodiscard]] bool WorldProxyMapIsValid(const RenderWorldProxyMapView &map, const Size logicalSize)
+{
+	return map.typePixels != nullptr
+	    && map.depthPixels != nullptr
+	    && map.heightPixels != nullptr
+	    && map.receiverPixels != nullptr
+	    && map.occluderPixels != nullptr
+	    && map.width >= logicalSize.width
+	    && map.height >= logicalSize.height
+	    && map.pitch >= map.width
+	    && logicalSize.width > 0
+	    && logicalSize.height > 0;
+}
+
+[[nodiscard]] CompositionAttachment MakeWorldProxyAttachment(const CompositionAttachmentRole role, const uint8_t *pixels, const RenderWorldProxyMapView &map, const Size logicalSize, const DirtyRectList &dirtyRects)
+{
+	return {
+		role,
+		CompositionAttachmentFormat::Alpha8,
+		logicalSize,
+		map.pitch,
+		map.version,
+		dirtyRects,
+		pixels,
+	};
+}
+
+void UpsertWorldProxyAttachments(std::vector<CompositionAttachment> &attachments, const RenderWorldProxyMapView &map, const Size logicalSize, const DirtyRectList &dirtyRects)
+{
+	if (!WorldProxyMapIsValid(map, logicalSize))
+		return;
+
+	UpsertCompositionAttachment(attachments, MakeWorldProxyAttachment(CompositionAttachmentRole::WorldDepth, map.depthPixels, map, logicalSize, dirtyRects));
+	UpsertCompositionAttachment(attachments, MakeWorldProxyAttachment(CompositionAttachmentRole::WorldHeight, map.heightPixels, map, logicalSize, dirtyRects));
+	UpsertCompositionAttachment(attachments, MakeWorldProxyAttachment(CompositionAttachmentRole::WorldReceiver, map.receiverPixels, map, logicalSize, dirtyRects));
+	UpsertCompositionAttachment(attachments, MakeWorldProxyAttachment(CompositionAttachmentRole::WorldOccluder, map.occluderPixels, map, logicalSize, dirtyRects));
+}
+
 void RecordCompositionSurfaceStats(RenderPerfCompositionStats &stats, const CompositionSurfaceMetadata &metadata)
 {
 	const auto coverage = [&](const CompositionSurfaceRole role) -> const CompositionSurfaceRoleCoverage & {
@@ -834,10 +999,12 @@ private:
 		const bool renderLayerTintEnabled = renderLayerDiagnosticsEnabled && UsesRenderLayerTint(frame.renderLayerDiagnosticMode);
 		const bool renderLayerOutlineEnabled = renderLayerDiagnosticsEnabled && UsesRenderLayerOutline(frame.renderLayerDiagnosticMode);
 		const bool worldMaskDiagnosticsEnabled = WorldMaskDiagnosticEnabled(frame);
+		const bool worldProxyDiagnosticsEnabled = WorldProxyDiagnosticEnabled(frame);
 		const std::array<uint32_t, 256> &mappedPalette = GetMappedPalette(outputSurface, frame.palette, frame.diagnosticTransform);
 		std::array<std::array<uint32_t, 256>, RenderLayerDiagnosticColorCount> mappedTintPalettes {};
 		std::array<uint32_t, RenderLayerDiagnosticColorCount> mappedOutlineColors {};
 		std::array<uint32_t, RenderWorldMaterialColorCount> mappedWorldMaterialColors {};
+		std::array<uint32_t, RenderWorldProxyPrimitiveColorCount> mappedWorldProxyPrimitiveColors {};
 		if (renderLayerTintEnabled) {
 			for (size_t i = 0; i < mappedPalette.size(); i++) {
 				const RgbColor color = frame.diagnosticTransform ? ApplyDiagnosticTransform(frame.palette.colors[i]) : frame.palette.colors[i];
@@ -859,9 +1026,13 @@ private:
 			for (size_t materialIndex = 0; materialIndex < mappedWorldMaterialColors.size(); materialIndex++)
 				mappedWorldMaterialColors[materialIndex] = MapRgba(outputSurface, RenderWorldMaterialDiagnosticColor(static_cast<uint8_t>(materialIndex)));
 		}
+		if (worldProxyDiagnosticsEnabled) {
+			for (size_t primitiveIndex = 0; primitiveIndex < mappedWorldProxyPrimitiveColors.size(); primitiveIndex++)
+				mappedWorldProxyPrimitiveColors[primitiveIndex] = MapRgba(outputSurface, RenderWorldProxyPrimitiveDiagnosticColor(static_cast<uint8_t>(primitiveIndex)));
+		}
 
 		const int bytesPerPixel = BytesPerPixel(outputSurface);
-		const bool useFast32NoDiagnostics = bytesPerPixel == 4 && !frame.diagnosticTransform && !renderLayerDiagnosticsEnabled && !worldMaskDiagnosticsEnabled;
+		const bool useFast32NoDiagnostics = bytesPerPixel == 4 && !frame.diagnosticTransform && !renderLayerDiagnosticsEnabled && !worldMaskDiagnosticsEnabled && !worldProxyDiagnosticsEnabled;
 		const auto composeRows32NoDiagnostics = [&](const int yBegin, const int yEnd) {
 			for (int y = yBegin; y < yEnd; y++) {
 				const uint8_t *src = frame.indexBuffer.pixels + y * frame.indexBuffer.pitch + rect.position.x;
@@ -909,6 +1080,11 @@ private:
 					}
 					if (worldMaskDiagnosticsEnabled) {
 						const uint32_t diagnosticPixel = WorldMaskDiagnosticPixel(frame, outputSurface, outputX, y, mappedWorldMaterialColors);
+						if (diagnosticPixel != 0)
+							pixel = diagnosticPixel;
+					}
+					if (worldProxyDiagnosticsEnabled) {
+						const uint32_t diagnosticPixel = WorldProxyDiagnosticPixel(frame, outputSurface, outputX, y, mappedWorldProxyPrimitiveColors);
 						if (diagnosticPixel != 0)
 							pixel = diagnosticPixel;
 					}
@@ -1232,11 +1408,13 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 	renderLayerMap_ = frame.renderLayerMap;
 	worldMaskMap_ = frame.worldMaskMap;
 	renderWorldMaskDiagnosticMode_ = frame.renderWorldMaskDiagnosticMode;
+	worldProxyMap_ = frame.worldProxyMap;
+	renderWorldProxyDiagnosticMode_ = frame.renderWorldProxyDiagnosticMode;
 	compositionSurfaceMetadata_ = WithFullFrameCompositionSurfaceBounds(frame.compositionSurfaceMetadata, frame.logicalSize);
 
 	lastCompositionStats_ = {};
 	lastCompositionStats_.compositorEnabled = true;
-	lastCompositionStats_.layerCaptureEnabled = frame.renderLayerMap.pixels != nullptr || frame.worldMaskMap.materialPixels != nullptr;
+	lastCompositionStats_.layerCaptureEnabled = frame.renderLayerMap.pixels != nullptr || frame.worldMaskMap.materialPixels != nullptr || frame.worldProxyMap.depthPixels != nullptr;
 	RecordCompositionSurfaceStats(lastCompositionStats_, compositionSurfaceMetadata_);
 	lastBackendResult_ = FrameCompositorBackendResult::NoFrameProduced;
 	directPresentationPending_ = false;
@@ -1252,6 +1430,8 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 	const bool renderLayerDiagnosticsRequested = renderLayerDiagnosticMode_ != RenderLayerDiagnosticMode::Off;
 	const bool renderWorldMaskDiagnosticModeChanged = hasComposedFrame_ && renderWorldMaskDiagnosticMode_ != lastRenderWorldMaskDiagnosticMode_;
 	const bool renderWorldMaskDiagnosticsRequested = renderWorldMaskDiagnosticMode_ != RenderWorldMaskDiagnosticMode::Off;
+	const bool renderWorldProxyDiagnosticModeChanged = hasComposedFrame_ && renderWorldProxyDiagnosticMode_ != lastRenderWorldProxyDiagnosticMode_;
+	const bool renderWorldProxyDiagnosticsRequested = renderWorldProxyDiagnosticMode_ != RenderWorldProxyDiagnosticMode::Off;
 	const bool lightShadowDiagnosticsRequested = *GetOptions().Experimental.renderLightShadowDiagnosticMode != RenderLightShadowDiagnosticMode::Off
 	    && *GetOptions().Experimental.renderFrameCompositorBackend == RenderFrameCompositorBackend::SdlGpuPalette;
 	const Size bounds {
@@ -1281,6 +1461,10 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 		fullFrameReason = CompositionFullFrameReason::WorldMaskDiagnosticModeChanged;
 	} else if (renderWorldMaskDiagnosticsRequested) {
 		fullFrameReason = CompositionFullFrameReason::WorldMaskDiagnosticsRequested;
+	} else if (renderWorldProxyDiagnosticModeChanged) {
+		fullFrameReason = CompositionFullFrameReason::WorldProxyDiagnosticModeChanged;
+	} else if (renderWorldProxyDiagnosticsRequested) {
+		fullFrameReason = CompositionFullFrameReason::WorldProxyDiagnosticsRequested;
 	} else if (lightShadowDiagnosticsRequested) {
 		fullFrameReason = CompositionFullFrameReason::LightShadowDiagnosticRequested;
 	} else if (outputSurfaceChanged) {
@@ -1308,6 +1492,7 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 		lastComposedDiagnosticTransformEnabled_ = diagnosticTransformEnabled_;
 		lastRenderLayerDiagnosticMode_ = renderLayerDiagnosticMode_;
 		lastRenderWorldMaskDiagnosticMode_ = renderWorldMaskDiagnosticMode_;
+		lastRenderWorldProxyDiagnosticMode_ = renderWorldProxyDiagnosticMode_;
 		outputSurfaceChangedSinceComposition_ = false;
 		indexBufferChangedSinceComposition_ = false;
 		logicalSizeChangedSinceComposition_ = false;
@@ -1325,11 +1510,14 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 			frame.attachments,
 			worldMaskMap_,
 			renderWorldMaskDiagnosticMode_,
+			worldProxyMap_,
+			renderWorldProxyDiagnosticMode_,
 		};
 		UpsertCompositionAttachment(backendFrame.attachments, MakeIndexedAlbedoAttachment(indexBuffer_, logicalSize_, frame.dirtyRects));
 		UpsertCompositionAttachment(backendFrame.attachments, MakePaletteAttachment(palette_));
 		UpsertCompositionSurfaceRoleAttachments(backendFrame.attachments, compositionSurfaceMetadata_, indexBuffer_, logicalSize_);
 		UpsertWorldMaskAttachments(backendFrame.attachments, worldMaskMap_, logicalSize_, frame.dirtyRects);
+		UpsertWorldProxyAttachments(backendFrame.attachments, worldProxyMap_, logicalSize_, frame.dirtyRects);
 
 		const FrameCompositorBackendResult result = ComposeRects(backendFrame, rects);
 		RecordBackendResult(lastCompositionStats_, result);
@@ -1390,11 +1578,14 @@ void CpuPaletteCompositor::Compose()
 		{},
 		worldMaskMap_,
 		renderWorldMaskDiagnosticMode_,
+		worldProxyMap_,
+		renderWorldProxyDiagnosticMode_,
 	};
 	UpsertCompositionAttachment(frame.attachments, MakeIndexedAlbedoAttachment(indexBuffer_, logicalSize_, dirtyRects_));
 	UpsertCompositionAttachment(frame.attachments, MakePaletteAttachment(palette_));
 	UpsertCompositionSurfaceRoleAttachments(frame.attachments, compositionSurfaceMetadata_, indexBuffer_, logicalSize_);
 	UpsertWorldMaskAttachments(frame.attachments, worldMaskMap_, logicalSize_, dirtyRects_);
+	UpsertWorldProxyAttachments(frame.attachments, worldProxyMap_, logicalSize_, dirtyRects_);
 	Compose(frame);
 }
 
@@ -1453,6 +1644,8 @@ bool ComposeFrameToOutput(SDL_Surface *outputSurface)
 		    {},
 		    CurrentRenderWorldMaskMapView(),
 		    *GetOptions().Experimental.renderWorldMaskDiagnosticMode,
+		    CurrentRenderWorldProxyMapView(),
+		    *GetOptions().Experimental.renderWorldProxyDiagnosticMode,
 		});
 	}
 	const FrameCompositorBackendResult backendResult = FrameCompositor.GetLastBackendResult();

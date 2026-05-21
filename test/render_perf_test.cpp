@@ -105,6 +105,7 @@ TEST_F(RenderPerfTest, RecordsCompositionAndLayerCaptureStats)
 	SetRenderPerfCompositionStats(composition);
 	SetRenderPerfLayerCaptureStats(4, 40);
 	SetRenderPerfWorldMaskStats(3, 30);
+	SetRenderPerfWorldProxyStats(2, 1, 96);
 
 	EndRenderPerfFrame();
 
@@ -115,6 +116,9 @@ TEST_F(RenderPerfTest, RecordsCompositionAndLayerCaptureStats)
 	EXPECT_EQ(frame.layerStampedPixelCount, 40);
 	EXPECT_EQ(frame.worldMaskStampedSpanCount, 3);
 	EXPECT_EQ(frame.worldMaskStampedPixelCount, 30);
+	EXPECT_EQ(frame.worldProxyPrimitiveCount, 2);
+	EXPECT_EQ(frame.worldProxyActorPrimitiveCount, 1);
+	EXPECT_EQ(frame.worldProxyPixelCount, 96);
 
 	const RenderPerfRollingStats &rolling = GetRenderPerfRollingStats();
 	EXPECT_EQ(rolling.fullFrameCompositionCount, 1);
@@ -136,6 +140,9 @@ TEST_F(RenderPerfTest, RecordsCompositionAndLayerCaptureStats)
 	EXPECT_EQ(rolling.layerStampedPixelCount, 40);
 	EXPECT_EQ(rolling.worldMaskStampedSpanCount, 3);
 	EXPECT_EQ(rolling.worldMaskStampedPixelCount, 30);
+	EXPECT_EQ(rolling.worldProxyPrimitiveCount, 2);
+	EXPECT_EQ(rolling.worldProxyActorPrimitiveCount, 1);
+	EXPECT_EQ(rolling.worldProxyPixelCount, 96);
 }
 
 TEST_F(RenderPerfTest, ResetsRollingStatsAfterReportWindow)

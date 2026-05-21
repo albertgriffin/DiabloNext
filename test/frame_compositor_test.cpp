@@ -670,6 +670,8 @@ TEST(FrameCompositor, CpuPaletteCompositorAddsWorldMaskAttachments)
 	    {},
 	    { materialMap.data(), receiverMap.data(), occluderMap.data(), emissiveMap.data(), 2, 1, 2, 77 },
 	    RenderWorldMaskDiagnosticMode::Off,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
 	});
 
 	ASSERT_EQ(backendPtr->composeCallCount, 1);
@@ -696,6 +698,78 @@ TEST(FrameCompositor, CpuPaletteCompositorAddsWorldMaskAttachments)
 	EXPECT_EQ(receiver->dirtyRects.rects.size(), 1);
 	EXPECT_EQ(occluder->dirtyRects.rects.size(), 1);
 	EXPECT_EQ(backendPtr->observedFrame.worldMaskMap.emissivePixels, emissiveMap.data());
+}
+
+TEST(FrameCompositor, CpuPaletteCompositorAddsWorldProxyAttachments)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+	pixels[1] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	std::array<uint8_t, 2> typeMap {
+		static_cast<uint8_t>(RenderWorldProxyPrimitive::FloorDiamond),
+		static_cast<uint8_t>(RenderWorldProxyPrimitive::LeftWallQuad),
+	};
+	std::array<uint8_t, 2> depthMap { 16, 200 };
+	std::array<uint8_t, 2> heightMap { 32, 192 };
+	std::array<uint8_t, 2> receiverMap { 255, 0 };
+	std::array<uint8_t, 2> occluderMap { 0, 255 };
+	DirtyRectList dirtyRects;
+	dirtyRects.rects.push_back({ { 1, 0 }, { 1, 1 } });
+
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+	auto backend = std::make_unique<RecordingFrameCompositorBackend>();
+	RecordingFrameCompositorBackend *backendPtr = backend.get();
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.Compose({
+	    { 2, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 42),
+	    dirtyRects,
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    {},
+	    {},
+	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
+	    { typeMap.data(), depthMap.data(), heightMap.data(), receiverMap.data(), occluderMap.data(), 2, 1, 2, 88 },
+	    RenderWorldProxyDiagnosticMode::Off,
+	});
+
+	ASSERT_EQ(backendPtr->composeCallCount, 1);
+	const CompositionFrame &observedFrame = backendPtr->observedFrame;
+	const CompositionAttachment *depth = FindCompositionAttachment(observedFrame.attachments, CompositionAttachmentRole::WorldDepth);
+	const CompositionAttachment *height = FindCompositionAttachment(observedFrame.attachments, CompositionAttachmentRole::WorldHeight);
+	const CompositionAttachment *receiver = FindCompositionAttachment(observedFrame.attachments, CompositionAttachmentRole::WorldReceiver);
+	const CompositionAttachment *occluder = FindCompositionAttachment(observedFrame.attachments, CompositionAttachmentRole::WorldOccluder);
+	ASSERT_NE(depth, nullptr);
+	ASSERT_NE(height, nullptr);
+	ASSERT_NE(receiver, nullptr);
+	ASSERT_NE(occluder, nullptr);
+	EXPECT_EQ(depth->format, CompositionAttachmentFormat::Alpha8);
+	EXPECT_EQ(height->format, CompositionAttachmentFormat::Alpha8);
+	EXPECT_EQ(receiver->format, CompositionAttachmentFormat::Alpha8);
+	EXPECT_EQ(occluder->format, CompositionAttachmentFormat::Alpha8);
+	EXPECT_EQ(depth->logicalSize, Size(2, 1));
+	EXPECT_EQ(depth->pitch, 2);
+	EXPECT_EQ(depth->version, 88);
+	EXPECT_EQ(height->version, 88);
+	EXPECT_EQ(receiver->version, 88);
+	EXPECT_EQ(occluder->version, 88);
+	EXPECT_EQ(backendPtr->observedFrame.worldProxyMap.typePixels, typeMap.data());
+	EXPECT_EQ(depth->cpuPixels, depthMap.data());
+	EXPECT_EQ(height->cpuPixels, heightMap.data());
+	EXPECT_EQ(receiver->cpuPixels, receiverMap.data());
+	EXPECT_EQ(occluder->cpuPixels, occluderMap.data());
+	ASSERT_EQ(depth->dirtyRects.rects.size(), 1);
+	EXPECT_EQ(depth->dirtyRects.rects[0].position.x, 1);
+	EXPECT_EQ(backendPtr->observedFrame.worldProxyMap.depthPixels, depthMap.data());
 }
 
 TEST(FrameCompositor, CpuPaletteCompositorReportsDirectPresentationFromBackend)
@@ -907,6 +981,8 @@ TEST(FrameCompositor, AcceleratedPaletteBackendUsesIndexedPathWithLayerMapWhenDi
 	    {},
 	    {},
 	    RenderWorldMaskDiagnosticMode::Off,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
 	});
 
 	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
@@ -987,6 +1063,8 @@ TEST(FrameCompositor, AcceleratedPaletteBackendUsesCpuPixelsForWorldMaskDiagnost
 	    {},
 	    { materialMap.data(), receiverMap.data(), occluderMap.data(), emissiveMap.data(), 1, 1, 1, 7 },
 	    RenderWorldMaskDiagnosticMode::Material,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
 	});
 
 	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
@@ -1001,6 +1079,61 @@ TEST(FrameCompositor, AcceleratedPaletteBackendUsesCpuPixelsForWorldMaskDiagnost
 	EXPECT_EQ(color.r, 255);
 	EXPECT_EQ(color.g, 64);
 	EXPECT_EQ(color.b, 220);
+}
+
+TEST(FrameCompositor, AcceleratedPaletteBackendUsesCpuPixelsForWorldProxyDiagnostics)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	std::array<uint8_t, 1> typeMap {
+		static_cast<uint8_t>(RenderWorldProxyPrimitive::FloorDiamond),
+	};
+	std::array<uint8_t, 1> depthMap { 180 };
+	std::array<uint8_t, 1> heightMap { 64 };
+	std::array<uint8_t, 1> receiverMap { 255 };
+	std::array<uint8_t, 1> occluderMap { 0 };
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto presenter = std::make_unique<RecordingAcceleratedPalettePresenter>();
+	RecordingAcceleratedPalettePresenter *presenterPtr = presenter.get();
+	std::unique_ptr<IFrameCompositorBackend> backend = CreateAcceleratedPaletteCompositorBackend(std::move(presenter));
+	ASSERT_NE(backend, nullptr);
+
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.Compose({
+	    { 1, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 42),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    {},
+	    {},
+	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
+	    { typeMap.data(), depthMap.data(), heightMap.data(), receiverMap.data(), occluderMap.data(), 1, 1, 1, 7 },
+	    RenderWorldProxyDiagnosticMode::Depth,
+	});
+
+	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
+	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 0);
+	EXPECT_EQ(presenterPtr->outputSurfaceFrameCallCount, 1);
+	EXPECT_EQ(presenterPtr->observedOutputSurface, outputSurface.get());
+	EXPECT_EQ(presenterPtr->observedOutputFrame.renderWorldProxyDiagnosticMode, RenderWorldProxyDiagnosticMode::Depth);
+	EXPECT_EQ(presenterPtr->observedOutputFrame.worldProxyMap.depthPixels, depthMap.data());
+	EXPECT_EQ(presenterPtr->observedOutputLighting, nullptr);
+
+	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(color.r, 180);
+	EXPECT_EQ(color.g, 180);
+	EXPECT_EQ(color.b, 180);
 }
 
 TEST(FrameCompositor, AcceleratedPaletteBackendForwardsLightingInputs)
@@ -1121,6 +1254,8 @@ TEST(FrameCompositor, AcceleratedPaletteBackendLightingDiagnosticUsesLayerMapIso
 	    {},
 	    {},
 	    RenderWorldMaskDiagnosticMode::Off,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
 	});
 
 	ASSERT_NE(presenterPtr->observedIndexedLighting, nullptr);
@@ -1517,6 +1652,8 @@ TEST(FrameCompositor, RenderLayerDiagnosticOffKeepsPaletteExactOutput)
 	    {},
 	    {},
 	    RenderWorldMaskDiagnosticMode::Off,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
 	});
 
 	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
@@ -1554,6 +1691,8 @@ TEST(FrameCompositor, RenderWorldMaskDiagnosticOffKeepsPaletteExactOutput)
 	    {},
 	    { materialMap.data(), receiverMap.data(), occluderMap.data(), emissiveMap.data(), 1, 1, 1, 9 },
 	    RenderWorldMaskDiagnosticMode::Off,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
 	});
 
 	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
@@ -1599,6 +1738,8 @@ TEST(FrameCompositor, RenderWorldMaskDiagnosticMaterialIsWorldOnly)
 	    {},
 	    { materialMap.data(), receiverMap.data(), occluderMap.data(), emissiveMap.data(), 2, 1, 2, 9 },
 	    RenderWorldMaskDiagnosticMode::Material,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
 	});
 
 	const SDL_Color world = ReadColor(*outputSurface, 0, 0);
@@ -1645,6 +1786,8 @@ TEST(FrameCompositor, RenderWorldMaskDiagnosticReceiverUsesMaskValues)
 	    {},
 	    { materialMap.data(), receiverMap.data(), occluderMap.data(), emissiveMap.data(), 2, 1, 2, 9 },
 	    RenderWorldMaskDiagnosticMode::Receiver,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
 	});
 
 	const SDL_Color receiver = ReadColor(*outputSurface, 0, 0);
@@ -1656,6 +1799,242 @@ TEST(FrameCompositor, RenderWorldMaskDiagnosticReceiverUsesMaskValues)
 	EXPECT_EQ(nonReceiver.r, 32);
 	EXPECT_EQ(nonReceiver.g, 32);
 	EXPECT_EQ(nonReceiver.b, 32);
+}
+
+TEST(FrameCompositor, RenderWorldProxyDiagnosticDepthIsWorldOnly)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+	pixels[1] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 20, 40, 60, 255 };
+
+	std::array<uint8_t, 2> layerMap {
+		static_cast<uint8_t>(RenderLayer::World),
+		static_cast<uint8_t>(RenderLayer::Interface),
+	};
+	std::array<uint8_t, 2> typeMap {
+		static_cast<uint8_t>(RenderWorldProxyPrimitive::FloorDiamond),
+		static_cast<uint8_t>(RenderWorldProxyPrimitive::LeftWallQuad),
+	};
+	std::array<uint8_t, 2> depthMap { 200, 50 };
+	std::array<uint8_t, 2> heightMap { 32, 192 };
+	std::array<uint8_t, 2> receiverMap { 255, 255 };
+	std::array<uint8_t, 2> occluderMap { 0, 255 };
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	CpuPaletteCompositor compositor;
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.Compose({
+	    { 2, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 1),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    { layerMap.data(), 2, 1, 2 },
+	    {},
+	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
+	    { typeMap.data(), depthMap.data(), heightMap.data(), receiverMap.data(), occluderMap.data(), 2, 1, 2, 9 },
+	    RenderWorldProxyDiagnosticMode::Depth,
+	});
+
+	const SDL_Color world = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(world.r, 200);
+	EXPECT_EQ(world.g, 200);
+	EXPECT_EQ(world.b, 200);
+
+	const SDL_Color interface = ReadColor(*outputSurface, 1, 0);
+	EXPECT_EQ(interface.r, 20);
+	EXPECT_EQ(interface.g, 40);
+	EXPECT_EQ(interface.b, 60);
+}
+
+TEST(FrameCompositor, RenderWorldProxyDiagnosticsUseHeightAndOccluderValues)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+	pixels[1] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 20, 40, 60, 255 };
+
+	std::array<uint8_t, 2> typeMap {
+		static_cast<uint8_t>(RenderWorldProxyPrimitive::FloorDiamond),
+		static_cast<uint8_t>(RenderWorldProxyPrimitive::LeftWallQuad),
+	};
+	std::array<uint8_t, 2> depthMap { 16, 200 };
+	std::array<uint8_t, 2> heightMap { 32, 192 };
+	std::array<uint8_t, 2> receiverMap { 0, 0 };
+	std::array<uint8_t, 2> occluderMap { 255, 0 };
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	CpuPaletteCompositor compositor;
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.Compose({
+	    { 2, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 1),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    {},
+	    {},
+	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
+	    { typeMap.data(), depthMap.data(), heightMap.data(), receiverMap.data(), occluderMap.data(), 2, 1, 2, 9 },
+	    RenderWorldProxyDiagnosticMode::Height,
+	});
+
+	const SDL_Color lowHeight = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(lowHeight.r, 32);
+	EXPECT_EQ(lowHeight.g, 64);
+	EXPECT_EQ(lowHeight.b, 223);
+
+	const SDL_Color highHeight = ReadColor(*outputSurface, 1, 0);
+	EXPECT_EQ(highHeight.r, 192);
+	EXPECT_EQ(highHeight.g, 64);
+	EXPECT_EQ(highHeight.b, 63);
+
+	compositor.Compose({
+	    { 2, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 1),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    {},
+	    {},
+	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
+	    { typeMap.data(), depthMap.data(), heightMap.data(), receiverMap.data(), occluderMap.data(), 2, 1, 2, 9 },
+	    RenderWorldProxyDiagnosticMode::Occluder,
+	});
+
+	const SDL_Color occluder = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(occluder.r, 64);
+	EXPECT_EQ(occluder.g, 160);
+	EXPECT_EQ(occluder.b, 255);
+
+	const SDL_Color nonOccluder = ReadColor(*outputSurface, 1, 0);
+	EXPECT_EQ(nonOccluder.r, 32);
+	EXPECT_EQ(nonOccluder.g, 32);
+	EXPECT_EQ(nonOccluder.b, 32);
+}
+
+TEST(FrameCompositor, RenderWorldProxyDiagnosticsExposeTypeCoverageAndOutline)
+{
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 3, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+	pixels[1] = 1;
+	pixels[2] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 20, 40, 60, 255 };
+
+	std::array<uint8_t, 3> typeMap {
+		static_cast<uint8_t>(RenderWorldProxyPrimitive::FloorDiamond),
+		UnknownRenderWorldProxyPrimitiveId,
+		static_cast<uint8_t>(RenderWorldProxyPrimitive::ActorBillboard),
+	};
+	std::array<uint8_t, 3> depthMap { 16, 0, 200 };
+	std::array<uint8_t, 3> heightMap { 32, 0, 160 };
+	std::array<uint8_t, 3> receiverMap { 255, 0, 0 };
+	std::array<uint8_t, 3> occluderMap { 0, 0, 255 };
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 3, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	CpuPaletteCompositor compositor;
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.Compose({
+	    { 3, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 1),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    {},
+	    {},
+	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
+	    { typeMap.data(), depthMap.data(), heightMap.data(), receiverMap.data(), occluderMap.data(), 3, 1, 3, 9 },
+	    RenderWorldProxyDiagnosticMode::Type,
+	});
+
+	const SDL_Color floorType = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(floorType.r, 64);
+	EXPECT_EQ(floorType.g, 255);
+	EXPECT_EQ(floorType.b, 96);
+
+	const SDL_Color missingType = ReadColor(*outputSurface, 1, 0);
+	EXPECT_EQ(missingType.r, 32);
+	EXPECT_EQ(missingType.g, 32);
+	EXPECT_EQ(missingType.b, 32);
+
+	const SDL_Color actorType = ReadColor(*outputSurface, 2, 0);
+	EXPECT_EQ(actorType.r, 224);
+	EXPECT_EQ(actorType.g, 64);
+	EXPECT_EQ(actorType.b, 255);
+
+	compositor.Compose({
+	    { 3, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 1),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    {},
+	    {},
+	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
+	    { typeMap.data(), depthMap.data(), heightMap.data(), receiverMap.data(), occluderMap.data(), 3, 1, 3, 9 },
+	    RenderWorldProxyDiagnosticMode::Coverage,
+	});
+
+	const SDL_Color covered = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(covered.r, 64);
+	EXPECT_EQ(covered.g, 255);
+	EXPECT_EQ(covered.b, 96);
+
+	const SDL_Color missing = ReadColor(*outputSurface, 1, 0);
+	EXPECT_EQ(missing.r, 255);
+	EXPECT_EQ(missing.g, 64);
+	EXPECT_EQ(missing.b, 64);
+
+	compositor.Compose({
+	    { 3, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 1),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    {},
+	    {},
+	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
+	    { typeMap.data(), depthMap.data(), heightMap.data(), receiverMap.data(), occluderMap.data(), 3, 1, 3, 9 },
+	    RenderWorldProxyDiagnosticMode::Outline,
+	});
+
+	const SDL_Color edge = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(edge.r, 255);
+	EXPECT_EQ(edge.g, 240);
+	EXPECT_EQ(edge.b, 64);
+
+	const SDL_Color missingOutline = ReadColor(*outputSurface, 1, 0);
+	EXPECT_EQ(missingOutline.r, 255);
+	EXPECT_EQ(missingOutline.g, 64);
+	EXPECT_EQ(missingOutline.b, 64);
 }
 
 TEST(FrameCompositor, RenderLayerDiagnosticTintBlendsLayerColor)
@@ -1684,6 +2063,8 @@ TEST(FrameCompositor, RenderLayerDiagnosticTintBlendsLayerColor)
 	    {},
 	    {},
 	    RenderWorldMaskDiagnosticMode::Off,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
 	});
 
 	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
@@ -1722,6 +2103,8 @@ TEST(FrameCompositor, RenderLayerDiagnosticOutlineMarksLayerBoundaries)
 	    {},
 	    {},
 	    RenderWorldMaskDiagnosticMode::Off,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
 	});
 
 	const SDL_Color worldBoundary = ReadColor(*outputSurface, 0, 0);
@@ -1767,6 +2150,8 @@ TEST(FrameCompositor, RenderLayerDiagnosticTintAndOutlineCombinesEffects)
 	    {},
 	    {},
 	    RenderWorldMaskDiagnosticMode::Off,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
 	});
 
 	const SDL_Color worldBoundary = ReadColor(*outputSurface, 0, 0);
@@ -1807,6 +2192,8 @@ TEST(FrameCompositor, RenderLayerDiagnosticRecomposesFullFrameWithoutDirtyRects)
 		{},
 		{},
 		RenderWorldMaskDiagnosticMode::Off,
+		{},
+		RenderWorldProxyDiagnosticMode::Off,
 	};
 	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
 
@@ -1864,6 +2251,8 @@ TEST(FrameCompositor, CpuPaletteCompositorComposesLargeDiagnosticFrameAcrossRowB
 	    {},
 	    {},
 	    RenderWorldMaskDiagnosticMode::Off,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
 	});
 
 	ExpectWorldTint(*outputSurface, 0, 0, palette[1]);
