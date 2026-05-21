@@ -9,6 +9,9 @@ Timedemo:
 tools/linux_reduced_cpu_variance_run.sh tools/measure_timedemo_performance.py -n 5 --binary build-rel/devilutionx
 ```
 
+For local render regression checks with the preserved Hellfire fixture, see
+[Local Platform Testing](local-platform-testing.md).
+
 Individual benchmarks (built when `BUILD_TESTING` is `ON`):
 
 ```bash

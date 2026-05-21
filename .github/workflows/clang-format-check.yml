@@ -39,26 +39,4 @@ jobs:
           head="HEAD"
         fi
 
-        mapfile -t files < <(
-          git diff --name-only --diff-filter=ACMRT "${base}" "${head}" -- Source test \
-            | grep -E '\.((c|C)(c|pp|xx|\+\+)?|(h|H)h?(pp|xx|\+\+)?|ino|pde|proto|cu)$' \
-            || true
-        )
-
-        if [[ ${#files[@]} -eq 0 ]]; then
-          echo "No changed C/C++ files to format-check."
-          exit 0
-        fi
-
-        printf 'Checking clang-format for changed files:\n'
-        printf '  %s\n' "${files[@]}"
-
-        docker run --rm \
-          --volume "${PWD}:${PWD}" \
-          --workdir "${PWD}" \
-          ghcr.io/jidicula/clang-format:18 \
-          --dry-run \
-          --Werror \
-          --style=file \
-          --fallback-style=llvm \
-          "${files[@]}"
+        tools/check_clang_format_changed.sh --base "${base}" --head "${head}"

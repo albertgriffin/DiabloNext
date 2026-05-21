@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+remote_name="$1"
+remote_url="$2"
+
+case "$remote_name $remote_url" in
+	*diasurgical/DevilutionX*|upstream*)
+		echo "Blocked push to upstream DevilutionX. Push to albertgriffin/DiabloNext only." >&2
+		exit 1
+		;;
+esac
+
+case "$remote_url" in
+	git@github.com:albertgriffin/DiabloNext.git|https://github.com/albertgriffin/DiabloNext.git|ssh://git@github.com/albertgriffin/DiabloNext.git)
+		exit 0
+		;;
+	*)
+		echo "Blocked push to unexpected remote: $remote_name $remote_url" >&2
+		echo "This checkout is configured to push only to albertgriffin/DiabloNext." >&2
+		exit 1
+		;;
+esac
