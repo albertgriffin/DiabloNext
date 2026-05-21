@@ -14,7 +14,6 @@
 
 #include "engine/clx_sprite.hpp"
 #include "engine/point.hpp"
-#include "engine/render/light_render.hpp"
 #include "engine/surface.hpp"
 
 namespace devilution {
@@ -87,24 +86,6 @@ void ClxDrawBlendedTRN(const Surface &out, Point position, ClxSprite clx, const 
  * @param clx CLX frame
  */
 void ClxDrawBlended(const Surface &out, Point position, ClxSprite clx);
-
-/**
- * @brief Blit CL2 sprite, and apply lighting, to the given buffer at the given coordinates
- * @param out Output buffer
- * @param position Target buffer coordinate
- * @param clx CLX frame
- * @param lightmap Per-pixel light buffer
- */
-void ClxDrawWithLightmap(const Surface &out, Point position, ClxSprite clx, const Lightmap &lightmap);
-
-/**
- * @brief Blit CL2 sprite, and apply lighting and transparency blending, to the given buffer at the given coordinates
- * @param out Output buffer
- * @param position Target buffer coordinate
- * @param clx CLX frame
- * @param lightmap Per-pixel light buffer
- */
-void ClxDrawBlendedWithLightmap(const Surface &out, Point position, ClxSprite clx, const Lightmap &lightmap);
 
 /**
  * Returns if cursor is within the CLX sprite (ignores shadow)

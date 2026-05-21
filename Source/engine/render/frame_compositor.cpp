@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <memory>
 
 #if defined(WINVER) && WINVER <= 0x0500 && (!defined(_WIN32_WINNT) || _WIN32_WINNT == 0)
 #define DEVILUTIONX_LEGACY_WINDOWS_9X 1
@@ -24,6 +25,9 @@
 #endif
 
 #if DEVILUTIONX_PARALLEL_COMPOSITION
+#include <condition_variable>
+#include <functional>
+#include <mutex>
 #include <thread>
 #endif
 
@@ -37,6 +41,7 @@
 #include "appfat.h"
 #include "engine/dx.h"
 #include "engine/palette.h"
+#include "engine/render/accelerated_compositor_lifecycle.hpp"
 #include "engine/render/render_layer.hpp"
 #include "options.h"
 #include "utils/display.h"
@@ -58,12 +63,162 @@ constexpr unsigned MaxParallelCompositionThreads = 6;
 int ThreadCountOverrideForTesting = 0;
 #endif
 
+[[nodiscard]] bool UsesDirectPresentation(const FrameCompositorBackendResult result)
+{
+	return result == FrameCompositorBackendResult::PreparedDirectPresentation
+	    || result == FrameCompositorBackendResult::RetainedDirectPresentation;
+}
+
+#if DEVILUTIONX_PARALLEL_COMPOSITION
+struct CompositionWorkerBand {
+	int yBegin = 0;
+	int yEnd = 0;
+};
+
+class CompositionWorkerPool {
+public:
+	~CompositionWorkerPool()
+	{
+		{
+			std::lock_guard<std::mutex> lock(mutex_);
+			stopping_ = true;
+			generation_++;
+		}
+		jobAvailable_.notify_all();
+		for (std::thread &worker : workers_) {
+			if (worker.joinable())
+				worker.join();
+		}
+	}
+
+	void Run(const int threadCount, const int yBegin, const int yEnd, const std::function<void(int, int)> &composeRows)
+	{
+		const size_t workerCount = static_cast<size_t>(threadCount - 1);
+		int nextYBegin = yBegin;
+		int mainYBegin = yBegin;
+		{
+			std::lock_guard<std::mutex> lock(mutex_);
+			EnsureWorkerCount(workerCount);
+			activeWorkerCount_ = workerCount;
+			remainingWorkerCount_ = workerCount;
+			job_ = &composeRows;
+
+			const int rowCount = yEnd - yBegin;
+			const int rowsPerThread = rowCount / threadCount;
+			const int extraRows = rowCount % threadCount;
+			for (size_t i = 0; i < workerCount; i++) {
+				const int bandHeight = rowsPerThread + (static_cast<int>(i) < extraRows ? 1 : 0);
+				bands_[i] = { nextYBegin, nextYBegin + bandHeight };
+				nextYBegin += bandHeight;
+			}
+			mainYBegin = nextYBegin;
+			generation_++;
+		}
+
+		jobAvailable_.notify_all();
+		composeRows(mainYBegin, yEnd);
+
+		std::unique_lock<std::mutex> lock(mutex_);
+		jobFinished_.wait(lock, [this]() { return remainingWorkerCount_ == 0; });
+		job_ = nullptr;
+		activeWorkerCount_ = 0;
+	}
+
+private:
+	void EnsureWorkerCount(const size_t workerCount)
+	{
+		while (workers_.size() < workerCount) {
+			const size_t workerIndex = workers_.size();
+			workers_.emplace_back([this, workerIndex]() { WorkerLoop(workerIndex); });
+		}
+	}
+
+	void WorkerLoop(const size_t workerIndex)
+	{
+		uint64_t observedGeneration = 0;
+		std::unique_lock<std::mutex> lock(mutex_);
+		while (true) {
+			jobAvailable_.wait(lock, [this, &observedGeneration]() { return stopping_ || generation_ != observedGeneration; });
+			if (stopping_)
+				return;
+
+			observedGeneration = generation_;
+			if (workerIndex >= activeWorkerCount_)
+				continue;
+
+			const CompositionWorkerBand band = bands_[workerIndex];
+			const std::function<void(int, int)> *job = job_;
+			lock.unlock();
+			(*job)(band.yBegin, band.yEnd);
+			lock.lock();
+
+			if (--remainingWorkerCount_ == 0)
+				jobFinished_.notify_one();
+		}
+	}
+
+	std::mutex mutex_;
+	std::condition_variable jobAvailable_;
+	std::condition_variable jobFinished_;
+	std::vector<std::thread> workers_;
+	std::array<CompositionWorkerBand, MaxParallelCompositionThreads - 1> bands_ {};
+	const std::function<void(int, int)> *job_ = nullptr;
+	uint64_t generation_ = 0;
+	size_t activeWorkerCount_ = 0;
+	size_t remainingWorkerCount_ = 0;
+	bool stopping_ = false;
+};
+
+CompositionWorkerPool &CompositionWorkers()
+{
+	static CompositionWorkerPool workerPool;
+	return workerPool;
+}
+#endif
+
+struct NormalizedDirtyRects {
+	DirtyRectList dirtyRects;
+	int submittedRectCount = 0;
+	int normalizedRectCount = 0;
+	uint64_t submittedArea = 0;
+	uint64_t normalizedArea = 0;
+	bool tooManyDirtyRects = false;
+};
+
+[[nodiscard]] uint64_t Area(const Rectangle &rect)
+{
+	if (rect.size.width <= 0 || rect.size.height <= 0)
+		return 0;
+	return static_cast<uint64_t>(rect.size.width) * static_cast<uint64_t>(rect.size.height);
+}
+
+[[nodiscard]] uint64_t Area(const Size size)
+{
+	if (size.width <= 0 || size.height <= 0)
+		return 0;
+	return static_cast<uint64_t>(size.width) * static_cast<uint64_t>(size.height);
+}
+
+[[nodiscard]] size_t CompositionSurfaceRoleIndex(const CompositionSurfaceRole role)
+{
+	return static_cast<size_t>(role);
+}
+
 [[nodiscard]] int BytesPerPixel(const SDL_Surface &surface)
 {
 #ifdef USE_SDL3
 	return SDL_BYTESPERPIXEL(surface.format);
 #else
 	return surface.format->BytesPerPixel;
+#endif
+}
+
+[[nodiscard]] uintptr_t OutputSurfaceFormatIdentity(const SDL_Surface &surface)
+{
+#ifdef USE_SDL3
+	return static_cast<uintptr_t>(surface.format);
+#else
+	return reinterpret_cast<uintptr_t>(surface.format);
 #endif
 }
 
@@ -198,6 +353,64 @@ void PutPixelBytes(uint8_t *dst, const int bytesPerPixel, const uint32_t pixel)
 	return { { x0, y0 }, { x1 - x0, y1 - y0 } };
 }
 
+void AccumulateCompositionSurfaceDirtyRect(CompositionSurfaceMetadata &metadata, const CompositionSurfaceRole role, const Rectangle rect)
+{
+	if (IsEmpty(rect))
+		return;
+	const size_t roleIndex = CompositionSurfaceRoleIndex(role);
+	if (roleIndex >= CompositionSurfaceRoleCount)
+		return;
+
+	CompositionSurfaceRoleCoverage &coverage = metadata.roles[roleIndex];
+	coverage.dirtyBounds = coverage.dirtyRectCount == 0 ? rect : Union(coverage.dirtyBounds, rect);
+	coverage.dirtyRectCount++;
+	coverage.dirtyPixelArea += Area(rect);
+}
+
+void AccumulateCompositionSurfaceFullFrame(CompositionSurfaceMetadata &metadata, const CompositionSurfaceRole role)
+{
+	const size_t roleIndex = CompositionSurfaceRoleIndex(role);
+	if (roleIndex >= CompositionSurfaceRoleCount)
+		return;
+	metadata.roles[roleIndex].fullFrameDirty = true;
+}
+
+[[nodiscard]] CompositionSurfaceMetadata WithFullFrameCompositionSurfaceBounds(CompositionSurfaceMetadata metadata, const Size logicalSize)
+{
+	if (logicalSize.width <= 0 || logicalSize.height <= 0)
+		return metadata;
+
+	const Rectangle fullFrame { { 0, 0 }, logicalSize };
+	const uint64_t fullFrameArea = Area(logicalSize);
+	for (CompositionSurfaceRoleCoverage &coverage : metadata.roles) {
+		if (!coverage.fullFrameDirty)
+			continue;
+		coverage.dirtyBounds = fullFrame;
+		coverage.dirtyPixelArea = std::max(coverage.dirtyPixelArea, fullFrameArea);
+		if (coverage.dirtyRectCount == 0)
+			coverage.dirtyRectCount = 1;
+	}
+	return metadata;
+}
+
+[[nodiscard]] CompositionSurfaceRole CompositionSurfaceRoleForRenderLayer(const RenderLayer layer)
+{
+	switch (layer) {
+	case RenderLayer::World:
+		return CompositionSurfaceRole::World;
+	case RenderLayer::WorldOverlay:
+		return CompositionSurfaceRole::WorldOverlay;
+	case RenderLayer::Interface:
+		return CompositionSurfaceRole::Interface;
+	case RenderLayer::Cursor:
+		return CompositionSurfaceRole::Cursor;
+	case RenderLayer::Debug:
+	case RenderLayer::Count:
+		return CompositionSurfaceRole::DiagnosticOverlay;
+	}
+	return CompositionSurfaceRole::DiagnosticOverlay;
+}
+
 void MergeOverlapsAt(std::vector<Rectangle> &rects, size_t index)
 {
 	bool merged = true;
@@ -220,8 +433,13 @@ void MergeOverlapsAt(std::vector<Rectangle> &rects, size_t index)
 [[nodiscard]] int CompositionThreadCount(const Rectangle &rect)
 {
 #ifdef BUILD_TESTING
-	if (ThreadCountOverrideForTesting > 0)
-		return std::min(ThreadCountOverrideForTesting, std::max(1, rect.size.height));
+	if (ThreadCountOverrideForTesting > 0) {
+		int threadCount = std::min(ThreadCountOverrideForTesting, std::max(1, rect.size.height));
+#if DEVILUTIONX_PARALLEL_COMPOSITION
+		threadCount = std::min(threadCount, static_cast<int>(MaxParallelCompositionThreads));
+#endif
+		return threadCount;
+	}
 #endif
 #if DEVILUTIONX_PARALLEL_COMPOSITION
 	const unsigned hardwareThreadCount = std::thread::hardware_concurrency();
@@ -255,11 +473,17 @@ void AddNormalizedDirtyRect(DirtyRectList &dirtyRects, Rectangle rect)
 	dirtyRects.rects.push_back(rect);
 }
 
-[[nodiscard]] DirtyRectList NormalizeDirtyRects(const DirtyRectList &dirtyRects, const Size bounds)
+[[nodiscard]] NormalizedDirtyRects NormalizeDirtyRects(const DirtyRectList &dirtyRects, const Size bounds)
 {
-	DirtyRectList normalized;
+	NormalizedDirtyRects normalized;
+	normalized.submittedRectCount = static_cast<int>(dirtyRects.rects.size());
+	for (const Rectangle &rect : dirtyRects.rects) {
+		normalized.submittedArea += Area(rect);
+	}
+
 	if (dirtyRects.fullFrame) {
-		normalized.fullFrame = true;
+		normalized.dirtyRects.fullFrame = true;
+		normalized.normalizedArea = Area(bounds);
 		return normalized;
 	}
 
@@ -271,16 +495,212 @@ void AddNormalizedDirtyRect(DirtyRectList &dirtyRects, Rectangle rect)
 		if (IsEmpty(rect))
 			continue;
 
-		AddNormalizedDirtyRect(normalized, rect);
-		if (normalized.rects.size() > MaxDirtyRectsBeforeFullFrame) {
-			normalized.rects.clear();
-			normalized.fullFrame = true;
+		AddNormalizedDirtyRect(normalized.dirtyRects, rect);
+		if (normalized.dirtyRects.rects.size() > MaxDirtyRectsBeforeFullFrame) {
+			normalized.dirtyRects.rects.clear();
+			normalized.dirtyRects.fullFrame = true;
+			normalized.tooManyDirtyRects = true;
+			normalized.normalizedArea = Area(bounds);
 			return normalized;
 		}
 	}
 
+	normalized.normalizedRectCount = static_cast<int>(normalized.dirtyRects.rects.size());
+	for (const Rectangle &rect : normalized.dirtyRects.rects) {
+		normalized.normalizedArea += Area(rect);
+	}
 	return normalized;
 }
+
+class CpuPaletteCompositorBackend final : public IFrameCompositorBackend {
+public:
+	std::string_view Name() const override
+	{
+		return "cpu-palette";
+	}
+
+	bool IsAvailable() const override
+	{
+		return true;
+	}
+
+	FrameCompositorBackendResult Compose(const CompositionFrame &frame, SDL_Surface &outputSurface, const std::vector<Rectangle> &rects, RenderPerfCompositionStats &stats) override
+	{
+		bool composed = false;
+		for (const Rectangle &rect : rects) {
+			if (ComposeRect(frame, outputSurface, rect, stats))
+				composed = true;
+		}
+		return composed ? FrameCompositorBackendResult::UpdatedOutputSurface : FrameCompositorBackendResult::NoFrameProduced;
+	}
+
+private:
+	struct MappedPaletteCache {
+		bool valid = false;
+		SDL_Surface *outputSurface = nullptr;
+		uintptr_t outputFormatIdentity = 0;
+		uint64_t paletteVersion = 0;
+		bool diagnosticTransform = false;
+		std::array<uint32_t, 256> mappedPalette {};
+	};
+
+	[[nodiscard]] const std::array<uint32_t, 256> &GetMappedPalette(SDL_Surface &outputSurface, const PaletteSnapshot &palette, bool diagnosticTransform)
+	{
+		const uintptr_t outputFormatIdentity = OutputSurfaceFormatIdentity(outputSurface);
+		if (mappedPaletteCache_.valid
+		    && mappedPaletteCache_.outputSurface == &outputSurface
+		    && mappedPaletteCache_.outputFormatIdentity == outputFormatIdentity
+		    && mappedPaletteCache_.paletteVersion == palette.version
+		    && mappedPaletteCache_.diagnosticTransform == diagnosticTransform) {
+			return mappedPaletteCache_.mappedPalette;
+		}
+
+		for (size_t i = 0; i < mappedPaletteCache_.mappedPalette.size(); i++) {
+			const RgbColor color = diagnosticTransform ? ApplyDiagnosticTransform(palette.colors[i]) : palette.colors[i];
+			mappedPaletteCache_.mappedPalette[i] = MapRgba(outputSurface, color);
+		}
+		mappedPaletteCache_.valid = true;
+		mappedPaletteCache_.outputSurface = &outputSurface;
+		mappedPaletteCache_.outputFormatIdentity = outputFormatIdentity;
+		mappedPaletteCache_.paletteVersion = palette.version;
+		mappedPaletteCache_.diagnosticTransform = diagnosticTransform;
+		return mappedPaletteCache_.mappedPalette;
+	}
+
+	[[nodiscard]] bool ComposeRect(const CompositionFrame &frame, SDL_Surface &outputSurface, Rectangle rect, RenderPerfCompositionStats &stats)
+	{
+		if (frame.indexBuffer.pixels == nullptr)
+			return false;
+
+		const Size bounds {
+			std::min({ frame.logicalSize.width, frame.indexBuffer.width, outputSurface.w }),
+			std::min({ frame.logicalSize.height, frame.indexBuffer.height, outputSurface.h }),
+		};
+		rect = ClipToBounds(rect, bounds);
+		if (rect.size.width == 0 || rect.size.height == 0)
+			return false;
+
+		SDL_Surface *outputSurfacePtr = &outputSurface;
+		const bool mustLock = SDL_MUSTLOCK(outputSurfacePtr);
+		if (mustLock) {
+#ifdef USE_SDL3
+			if (!SDL_LockSurface(outputSurfacePtr)) ErrSdl();
+#else
+			if (SDL_LockSurface(outputSurfacePtr) < 0) ErrSdl();
+#endif
+		}
+
+		const bool renderLayerDiagnosticsEnabled = frame.renderLayerDiagnosticMode != RenderLayerDiagnosticMode::Off && frame.renderLayerMap.pixels != nullptr;
+		const bool renderLayerTintEnabled = renderLayerDiagnosticsEnabled && UsesRenderLayerTint(frame.renderLayerDiagnosticMode);
+		const bool renderLayerOutlineEnabled = renderLayerDiagnosticsEnabled && UsesRenderLayerOutline(frame.renderLayerDiagnosticMode);
+		const std::array<uint32_t, 256> &mappedPalette = GetMappedPalette(outputSurface, frame.palette, frame.diagnosticTransform);
+		std::array<std::array<uint32_t, 256>, RenderLayerDiagnosticColorCount> mappedTintPalettes {};
+		std::array<uint32_t, RenderLayerDiagnosticColorCount> mappedOutlineColors {};
+		if (renderLayerTintEnabled) {
+			for (size_t i = 0; i < mappedPalette.size(); i++) {
+				const RgbColor color = frame.diagnosticTransform ? ApplyDiagnosticTransform(frame.palette.colors[i]) : frame.palette.colors[i];
+				for (size_t colorIndex = 0; colorIndex < mappedTintPalettes.size(); colorIndex++) {
+					RgbColor tintedColor = color;
+					const RgbColor layerColor = RenderLayerDiagnosticColorByIndex(colorIndex);
+					tintedColor.r = static_cast<uint8_t>((static_cast<uint16_t>(tintedColor.r) + layerColor.r) / 2);
+					tintedColor.g = static_cast<uint8_t>((static_cast<uint16_t>(tintedColor.g) + layerColor.g) / 2);
+					tintedColor.b = static_cast<uint8_t>((static_cast<uint16_t>(tintedColor.b) + layerColor.b) / 2);
+					mappedTintPalettes[colorIndex][i] = MapRgba(outputSurface, tintedColor);
+				}
+			}
+		}
+		if (renderLayerOutlineEnabled) {
+			for (size_t colorIndex = 0; colorIndex < mappedOutlineColors.size(); colorIndex++)
+				mappedOutlineColors[colorIndex] = MapRgba(outputSurface, RenderLayerDiagnosticColorByIndex(colorIndex));
+		}
+
+		const int bytesPerPixel = BytesPerPixel(outputSurface);
+		const bool useFast32NoDiagnostics = bytesPerPixel == 4 && !frame.diagnosticTransform && !renderLayerDiagnosticsEnabled;
+		const auto composeRows32NoDiagnostics = [&](const int yBegin, const int yEnd) {
+			for (int y = yBegin; y < yEnd; y++) {
+				const uint8_t *src = frame.indexBuffer.pixels + y * frame.indexBuffer.pitch + rect.position.x;
+				uint32_t *dst = reinterpret_cast<uint32_t *>(
+				    static_cast<uint8_t *>(outputSurface.pixels) + static_cast<ptrdiff_t>(y) * outputSurface.pitch + rect.position.x * sizeof(uint32_t));
+				for (int x = 0; x < rect.size.width; x++) {
+					dst[x] = mappedPalette[src[x]];
+				}
+			}
+		};
+		const auto composeRowsGeneric = [&](const int yBegin, const int yEnd) {
+			for (int y = yBegin; y < yEnd; y++) {
+				const uint8_t *src = frame.indexBuffer.pixels + y * frame.indexBuffer.pitch + rect.position.x;
+				uint8_t *dstRow = static_cast<uint8_t *>(outputSurface.pixels) + static_cast<ptrdiff_t>(y) * outputSurface.pitch + rect.position.x * bytesPerPixel;
+				uint32_t *dst32 = bytesPerPixel == 4 ? reinterpret_cast<uint32_t *>(dstRow) : nullptr;
+				const bool layerRowInBounds = frame.renderLayerMap.pixels != nullptr && y >= 0 && y < frame.renderLayerMap.height;
+				const uint8_t *layerRow = layerRowInBounds ? frame.renderLayerMap.pixels + static_cast<size_t>(y) * frame.renderLayerMap.pitch : nullptr;
+				const uint8_t *layerRowAbove = frame.renderLayerMap.pixels != nullptr && y > 0 && y - 1 < frame.renderLayerMap.height ? frame.renderLayerMap.pixels + static_cast<size_t>(y - 1) * frame.renderLayerMap.pitch : nullptr;
+				const uint8_t *layerRowBelow = frame.renderLayerMap.pixels != nullptr && y + 1 < frame.renderLayerMap.height ? frame.renderLayerMap.pixels + static_cast<size_t>(y + 1) * frame.renderLayerMap.pitch : nullptr;
+				for (int x = 0; x < rect.size.width; x++) {
+					const int outputX = rect.position.x + x;
+					uint32_t pixel = mappedPalette[src[x]];
+					if (renderLayerDiagnosticsEnabled) {
+						uint8_t layerId = UnknownRenderLayerId;
+						if (layerRow != nullptr && outputX >= 0 && outputX < frame.renderLayerMap.width)
+							layerId = layerRow[outputX];
+						const size_t colorIndex = RenderLayerDiagnosticColorIndex(layerId);
+						if (renderLayerTintEnabled)
+							pixel = mappedTintPalettes[colorIndex][src[x]];
+						if (renderLayerOutlineEnabled) {
+							bool isBoundary = layerId == UnknownRenderLayerId;
+							if (!isBoundary) {
+								if (outputX > 0 && layerRow[outputX - 1] != layerId)
+									isBoundary = true;
+								else if (outputX + 1 < frame.renderLayerMap.width && layerRow[outputX + 1] != layerId)
+									isBoundary = true;
+								else if (layerRowAbove != nullptr && layerRowAbove[outputX] != layerId)
+									isBoundary = true;
+								else if (layerRowBelow != nullptr && layerRowBelow[outputX] != layerId)
+									isBoundary = true;
+							}
+							if (isBoundary)
+								pixel = mappedOutlineColors[colorIndex];
+						}
+					}
+					if (dst32 != nullptr) {
+						dst32[x] = pixel;
+					} else {
+						PutPixelBytes(dstRow + x * bytesPerPixel, bytesPerPixel, pixel);
+					}
+				}
+			}
+		};
+		const auto composeRows = [&](const int yBegin, const int yEnd) {
+			if (useFast32NoDiagnostics) {
+				composeRows32NoDiagnostics(yBegin, yEnd);
+			} else {
+				composeRowsGeneric(yBegin, yEnd);
+			}
+		};
+
+		const int threadCount = CompositionThreadCount(rect);
+		stats.selectedThreadCount = std::max(stats.selectedThreadCount, threadCount);
+#if DEVILUTIONX_PARALLEL_COMPOSITION
+		if (threadCount > 1)
+			stats.parallelCompositionUsed = true;
+#endif
+#if DEVILUTIONX_PARALLEL_COMPOSITION
+		if (threadCount == 1) {
+			composeRows(rect.position.y, rect.position.y + rect.size.height);
+		} else {
+			CompositionWorkers().Run(threadCount, rect.position.y, rect.position.y + rect.size.height, composeRows);
+		}
+#else
+		(void)threadCount;
+		composeRows(rect.position.y, rect.position.y + rect.size.height);
+#endif
+
+		if (mustLock)
+			SDL_UnlockSurface(outputSurfacePtr);
+		return true;
+	}
+
+	MappedPaletteCache mappedPaletteCache_ {};
+};
 
 } // namespace
 
@@ -314,6 +734,37 @@ PaletteSnapshot MakePaletteSnapshot(const std::array<SDL_Color, 256> &palette, c
 	return snapshot;
 }
 
+std::unique_ptr<IFrameCompositorBackend> CreateCpuFrameCompositorBackend()
+{
+	return std::make_unique<CpuPaletteCompositorBackend>();
+}
+
+namespace {
+
+RenderFrameCompositorBackend CurrentFrameCompositorBackend = RenderFrameCompositorBackend::CpuPalette;
+bool CurrentFrameCompositorBackendInitialized = false;
+
+[[nodiscard]] std::unique_ptr<IFrameCompositorBackend> CreateFrameCompositorBackend(RenderFrameCompositorBackend backend)
+{
+	std::unique_ptr<IFrameCompositorBackend> acceleratedBackend = CreateAcceleratedFrameCompositorBackend(backend);
+	if (acceleratedBackend != nullptr && acceleratedBackend->IsAvailable())
+		return acceleratedBackend;
+	return CreateCpuFrameCompositorBackend();
+}
+
+void EnsureFrameCompositorBackend()
+{
+	const RenderFrameCompositorBackend requestedBackend = *GetOptions().Experimental.renderFrameCompositorBackend;
+	if (CurrentFrameCompositorBackendInitialized && CurrentFrameCompositorBackend == requestedBackend)
+		return;
+
+	FrameCompositor.SetBackend(CreateFrameCompositorBackend(requestedBackend));
+	CurrentFrameCompositorBackend = requestedBackend;
+	CurrentFrameCompositorBackendInitialized = true;
+}
+
+} // namespace
+
 #ifdef BUILD_TESTING
 void SetFrameCompositorThreadCountOverrideForTesting(const int threadCount)
 {
@@ -321,17 +772,33 @@ void SetFrameCompositorThreadCountOverrideForTesting(const int threadCount)
 }
 #endif
 
+CpuPaletteCompositor::CpuPaletteCompositor()
+    : CpuPaletteCompositor(CreateCpuFrameCompositorBackend())
+{
+}
+
+CpuPaletteCompositor::CpuPaletteCompositor(std::unique_ptr<IFrameCompositorBackend> backend)
+    : backend_(std::move(backend))
+{
+}
+
 void CpuPaletteCompositor::BeginFrame(const Size logicalSize)
 {
-	if (logicalSize_ != logicalSize)
+	if (logicalSize_ != logicalSize) {
+		if (hasComposedFrame_)
+			logicalSizeChangedSinceComposition_ = true;
 		hasComposedFrame_ = false;
+	}
 	logicalSize_ = logicalSize;
 }
 
 void CpuPaletteCompositor::SubmitIndexBuffer(const IndexBufferView indexBuffer)
 {
-	if (IndexBufferIdentityChanged(indexBuffer_, indexBuffer))
+	if (IndexBufferIdentityChanged(indexBuffer_, indexBuffer)) {
+		if (hasComposedFrame_)
+			indexBufferChangedSinceComposition_ = true;
 		hasComposedFrame_ = false;
+	}
 	indexBuffer_ = indexBuffer;
 }
 
@@ -347,26 +814,42 @@ void CpuPaletteCompositor::SubmitDirtyRects(const DirtyRectList &dirtyRects)
 
 void CpuPaletteCompositor::SetOutputSurface(SDL_Surface *outputSurface)
 {
-	if (outputSurface_ != outputSurface)
+	if (outputSurface_ != outputSurface) {
+		if (hasComposedFrame_)
+			outputSurfaceChangedSinceComposition_ = true;
 		hasComposedFrame_ = false;
+	}
 	outputSurface_ = outputSurface;
 }
 
 void CpuPaletteCompositor::AddDirtyRect(Rectangle rect)
 {
+	AddDirtyRect(rect, CompositionSurfaceRole::World);
+}
+
+void CpuPaletteCompositor::AddDirtyRect(Rectangle rect, const CompositionSurfaceRole role)
+{
 	if (rect.size.width <= 0 || rect.size.height <= 0)
 		return;
 	dirtyRects_.rects.push_back(rect);
+	AccumulateCompositionSurfaceDirtyRect(compositionSurfaceMetadata_, role, rect);
 }
 
 void CpuPaletteCompositor::SetFullFrameDirty()
 {
+	SetFullFrameDirty(CompositionSurfaceRole::World);
+}
+
+void CpuPaletteCompositor::SetFullFrameDirty(const CompositionSurfaceRole role)
+{
 	dirtyRects_.fullFrame = true;
+	AccumulateCompositionSurfaceFullFrame(compositionSurfaceMetadata_, role);
 }
 
 void CpuPaletteCompositor::ResetDirtyRects()
 {
 	dirtyRects_ = {};
+	compositionSurfaceMetadata_ = {};
 }
 
 void CpuPaletteCompositor::SetDiagnosticTransformEnabled(const bool enabled)
@@ -374,139 +857,44 @@ void CpuPaletteCompositor::SetDiagnosticTransformEnabled(const bool enabled)
 	diagnosticTransformEnabled_ = enabled;
 }
 
+void CpuPaletteCompositor::SetBackend(std::unique_ptr<IFrameCompositorBackend> backend)
+{
+	backend_ = std::move(backend);
+	hasComposedFrame_ = false;
+	lastBackendResult_ = FrameCompositorBackendResult::NoFrameProduced;
+	directPresentationPending_ = false;
+	lastComposedFrameUsedDirectPresentation_ = false;
+	outputSurfaceChangedSinceComposition_ = true;
+}
+
 const DirtyRectList &CpuPaletteCompositor::GetDirtyRects() const
 {
 	return dirtyRects_;
 }
 
-bool CpuPaletteCompositor::ComposeRect(Rectangle rect)
+const CompositionSurfaceMetadata &CpuPaletteCompositor::GetCompositionSurfaceMetadata() const
 {
-	if (outputSurface_ == nullptr || indexBuffer_.pixels == nullptr)
-		return false;
+	return compositionSurfaceMetadata_;
+}
 
-	const Size bounds {
-		std::min({ logicalSize_.width, indexBuffer_.width, outputSurface_->w }),
-		std::min({ logicalSize_.height, indexBuffer_.height, outputSurface_->h }),
-	};
-	rect = ClipToBounds(rect, bounds);
-	if (rect.size.width == 0 || rect.size.height == 0)
-		return false;
+const RenderPerfCompositionStats &CpuPaletteCompositor::GetLastCompositionStats() const
+{
+	return lastCompositionStats_;
+}
 
-	const bool mustLock = SDL_MUSTLOCK(outputSurface_);
-	if (mustLock) {
-#ifdef USE_SDL3
-		if (!SDL_LockSurface(outputSurface_)) ErrSdl();
-#else
-		if (SDL_LockSurface(outputSurface_) < 0) ErrSdl();
-#endif
-	}
-
-	const bool renderLayerDiagnosticsEnabled = renderLayerDiagnosticMode_ != RenderLayerDiagnosticMode::Off && renderLayerMap_.pixels != nullptr;
-	const bool renderLayerTintEnabled = renderLayerDiagnosticsEnabled && UsesRenderLayerTint(renderLayerDiagnosticMode_);
-	const bool renderLayerOutlineEnabled = renderLayerDiagnosticsEnabled && UsesRenderLayerOutline(renderLayerDiagnosticMode_);
-	std::array<uint32_t, 256> mappedPalette;
-	std::array<std::array<uint32_t, 256>, RenderLayerDiagnosticColorCount> mappedTintPalettes {};
-	std::array<uint32_t, RenderLayerDiagnosticColorCount> mappedOutlineColors {};
-	for (size_t i = 0; i < mappedPalette.size(); i++) {
-		const RgbColor color = diagnosticTransformEnabled_ ? ApplyDiagnosticTransform(palette_.colors[i]) : palette_.colors[i];
-		mappedPalette[i] = MapRgba(*outputSurface_, color);
-		if (renderLayerTintEnabled) {
-			for (size_t colorIndex = 0; colorIndex < mappedTintPalettes.size(); colorIndex++) {
-				RgbColor tintedColor = color;
-				const RgbColor layerColor = RenderLayerDiagnosticColorByIndex(colorIndex);
-				tintedColor.r = static_cast<uint8_t>((static_cast<uint16_t>(tintedColor.r) + layerColor.r) / 2);
-				tintedColor.g = static_cast<uint8_t>((static_cast<uint16_t>(tintedColor.g) + layerColor.g) / 2);
-				tintedColor.b = static_cast<uint8_t>((static_cast<uint16_t>(tintedColor.b) + layerColor.b) / 2);
-				mappedTintPalettes[colorIndex][i] = MapRgba(*outputSurface_, tintedColor);
-			}
-		}
-	}
-	if (renderLayerOutlineEnabled) {
-		for (size_t colorIndex = 0; colorIndex < mappedOutlineColors.size(); colorIndex++)
-			mappedOutlineColors[colorIndex] = MapRgba(*outputSurface_, RenderLayerDiagnosticColorByIndex(colorIndex));
-	}
-
-	const int bytesPerPixel = BytesPerPixel(*outputSurface_);
-	const auto composeRows = [&](const int yBegin, const int yEnd) {
-		for (int y = yBegin; y < yEnd; y++) {
-			const uint8_t *src = indexBuffer_.pixels + y * indexBuffer_.pitch + rect.position.x;
-			uint8_t *dstRow = static_cast<uint8_t *>(outputSurface_->pixels) + static_cast<ptrdiff_t>(y) * outputSurface_->pitch + rect.position.x * bytesPerPixel;
-			uint32_t *dst32 = bytesPerPixel == 4 ? reinterpret_cast<uint32_t *>(dstRow) : nullptr;
-			const bool layerRowInBounds = renderLayerMap_.pixels != nullptr && y >= 0 && y < renderLayerMap_.height;
-			const uint8_t *layerRow = layerRowInBounds ? renderLayerMap_.pixels + static_cast<size_t>(y) * renderLayerMap_.pitch : nullptr;
-			const uint8_t *layerRowAbove = renderLayerMap_.pixels != nullptr && y > 0 && y - 1 < renderLayerMap_.height ? renderLayerMap_.pixels + static_cast<size_t>(y - 1) * renderLayerMap_.pitch : nullptr;
-			const uint8_t *layerRowBelow = renderLayerMap_.pixels != nullptr && y + 1 < renderLayerMap_.height ? renderLayerMap_.pixels + static_cast<size_t>(y + 1) * renderLayerMap_.pitch : nullptr;
-			for (int x = 0; x < rect.size.width; x++) {
-				const int outputX = rect.position.x + x;
-				uint32_t pixel = mappedPalette[src[x]];
-				if (renderLayerDiagnosticsEnabled) {
-					uint8_t layerId = UnknownRenderLayerId;
-					if (layerRow != nullptr && outputX >= 0 && outputX < renderLayerMap_.width)
-						layerId = layerRow[outputX];
-					const size_t colorIndex = RenderLayerDiagnosticColorIndex(layerId);
-					if (renderLayerTintEnabled)
-						pixel = mappedTintPalettes[colorIndex][src[x]];
-					if (renderLayerOutlineEnabled) {
-						bool isBoundary = layerId == UnknownRenderLayerId;
-						if (!isBoundary) {
-							if (outputX > 0 && layerRow[outputX - 1] != layerId)
-								isBoundary = true;
-							else if (outputX + 1 < renderLayerMap_.width && layerRow[outputX + 1] != layerId)
-								isBoundary = true;
-							else if (layerRowAbove != nullptr && layerRowAbove[outputX] != layerId)
-								isBoundary = true;
-							else if (layerRowBelow != nullptr && layerRowBelow[outputX] != layerId)
-								isBoundary = true;
-						}
-						if (isBoundary)
-							pixel = mappedOutlineColors[colorIndex];
-					}
-				}
-				if (dst32 != nullptr) {
-					dst32[x] = pixel;
-				} else {
-					PutPixelBytes(dstRow + x * bytesPerPixel, bytesPerPixel, pixel);
-				}
-			}
-		}
-	};
-
-	const int threadCount = CompositionThreadCount(rect);
-#if DEVILUTIONX_PARALLEL_COMPOSITION
-	if (threadCount == 1) {
-		composeRows(rect.position.y, rect.position.y + rect.size.height);
-	} else {
-		std::vector<std::thread> workers;
-		workers.reserve(static_cast<size_t>(threadCount - 1));
-		const int rowsPerThread = rect.size.height / threadCount;
-		const int extraRows = rect.size.height % threadCount;
-		int yBegin = rect.position.y;
-		for (int i = 0; i < threadCount - 1; i++) {
-			const int bandHeight = rowsPerThread + (i < extraRows ? 1 : 0);
-			const int yEnd = yBegin + bandHeight;
-			workers.emplace_back(composeRows, yBegin, yEnd);
-			yBegin = yEnd;
-		}
-		composeRows(yBegin, rect.position.y + rect.size.height);
-		for (std::thread &worker : workers) {
-			worker.join();
-		}
-	}
-#else
-	(void)threadCount;
-	composeRows(rect.position.y, rect.position.y + rect.size.height);
-#endif
-
-	if (mustLock)
-		SDL_UnlockSurface(outputSurface_);
-	return true;
+FrameCompositorBackendResult CpuPaletteCompositor::GetLastBackendResult() const
+{
+	return lastBackendResult_;
 }
 
 void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 {
-	if (logicalSize_ != frame.logicalSize)
+	const bool logicalSizeChanged = logicalSizeChangedSinceComposition_ || (hasComposedFrame_ && logicalSize_ != frame.logicalSize);
+	const bool indexBufferChanged = indexBufferChangedSinceComposition_ || (hasComposedFrame_ && IndexBufferIdentityChanged(indexBuffer_, frame.indexBuffer));
+	const bool outputSurfaceChanged = outputSurfaceChangedSinceComposition_;
+	if (logicalSizeChanged)
 		hasComposedFrame_ = false;
-	if (IndexBufferIdentityChanged(indexBuffer_, frame.indexBuffer))
+	if (indexBufferChanged)
 		hasComposedFrame_ = false;
 	logicalSize_ = frame.logicalSize;
 	indexBuffer_ = frame.indexBuffer;
@@ -514,9 +902,18 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 	diagnosticTransformEnabled_ = frame.diagnosticTransform;
 	renderLayerDiagnosticMode_ = frame.renderLayerDiagnosticMode;
 	renderLayerMap_ = frame.renderLayerMap;
+	compositionSurfaceMetadata_ = WithFullFrameCompositionSurfaceBounds(frame.compositionSurfaceMetadata, frame.logicalSize);
 
-	if (logicalSize_.width <= 0 || logicalSize_.height <= 0)
+	lastCompositionStats_ = {};
+	lastCompositionStats_.compositorEnabled = true;
+	lastCompositionStats_.layerCaptureEnabled = frame.renderLayerMap.pixels != nullptr;
+	lastBackendResult_ = FrameCompositorBackendResult::NoFrameProduced;
+	directPresentationPending_ = false;
+
+	if (logicalSize_.width <= 0 || logicalSize_.height <= 0) {
+		SetRenderPerfCompositionStats(lastCompositionStats_);
 		return;
+	}
 
 	const bool paletteChanged = hasComposedFrame_ && palette_.version != lastComposedPaletteVersion_;
 	const bool diagnosticTransformChanged = hasComposedFrame_ && diagnosticTransformEnabled_ != lastComposedDiagnosticTransformEnabled_;
@@ -526,28 +923,105 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 		std::min({ logicalSize_.width, indexBuffer_.width, outputSurface_ != nullptr ? outputSurface_->w : 0 }),
 		std::min({ logicalSize_.height, indexBuffer_.height, outputSurface_ != nullptr ? outputSurface_->h : 0 }),
 	};
-	DirtyRectList normalizedDirtyRects = NormalizeDirtyRects(frame.dirtyRects, bounds);
-	const bool emptyInitialFrame = !hasComposedFrame_ && normalizedDirtyRects.rects.empty() && !normalizedDirtyRects.fullFrame;
-	if (normalizedDirtyRects.fullFrame || paletteChanged || diagnosticTransformChanged || renderLayerDiagnosticModeChanged || renderLayerDiagnosticsRequested || emptyInitialFrame) {
-		if (ComposeRect({ { 0, 0 }, logicalSize_ })) {
-			hasComposedFrame_ = true;
-			lastComposedPaletteVersion_ = palette_.version;
-			lastComposedDiagnosticTransformEnabled_ = diagnosticTransformEnabled_;
-			lastRenderLayerDiagnosticMode_ = renderLayerDiagnosticMode_;
-		}
-		return;
+	NormalizedDirtyRects normalizedDirtyRects = NormalizeDirtyRects(frame.dirtyRects, bounds);
+	lastCompositionStats_.submittedDirtyRectCount = normalizedDirtyRects.submittedRectCount;
+	lastCompositionStats_.normalizedDirtyRectCount = normalizedDirtyRects.normalizedRectCount;
+	lastCompositionStats_.submittedDirtyArea = normalizedDirtyRects.submittedArea;
+	lastCompositionStats_.normalizedDirtyArea = normalizedDirtyRects.normalizedArea;
+
+	const bool noDirtyRects = normalizedDirtyRects.dirtyRects.rects.empty() && !normalizedDirtyRects.dirtyRects.fullFrame;
+	const bool emptyInitialFrame = !hasComposedFrame_ && noDirtyRects;
+	CompositionFullFrameReason fullFrameReason = CompositionFullFrameReason::None;
+	if (normalizedDirtyRects.dirtyRects.fullFrame) {
+		fullFrameReason = normalizedDirtyRects.tooManyDirtyRects ? CompositionFullFrameReason::TooManyDirtyRects : CompositionFullFrameReason::Requested;
+	} else if (paletteChanged) {
+		fullFrameReason = CompositionFullFrameReason::PaletteChanged;
+	} else if (diagnosticTransformChanged) {
+		fullFrameReason = CompositionFullFrameReason::DiagnosticTransformChanged;
+	} else if (renderLayerDiagnosticModeChanged) {
+		fullFrameReason = CompositionFullFrameReason::RenderLayerDiagnosticModeChanged;
+	} else if (renderLayerDiagnosticsRequested) {
+		fullFrameReason = CompositionFullFrameReason::RenderLayerDiagnosticsRequested;
+	} else if (outputSurfaceChanged) {
+		fullFrameReason = CompositionFullFrameReason::OutputSurfaceChanged;
+	} else if (indexBufferChanged) {
+		fullFrameReason = CompositionFullFrameReason::IndexBufferChanged;
+	} else if (logicalSizeChanged) {
+		fullFrameReason = CompositionFullFrameReason::LogicalSizeChanged;
+	} else if (noDirtyRects && lastComposedFrameUsedDirectPresentation_ && (backend_ == nullptr || !backend_->CanRetainDirectPresentation())) {
+		fullFrameReason = CompositionFullFrameReason::DirectPresentationUnavailable;
+	} else if (emptyInitialFrame) {
+		fullFrameReason = CompositionFullFrameReason::FirstFrame;
 	}
 
-	bool composed = false;
-	for (const Rectangle &rect : normalizedDirtyRects.rects) {
-		composed = ComposeRect(rect) || composed;
-	}
-	if (composed) {
+	const auto recordComposedRect = [&](Rectangle rect) {
+		rect = ClipToBounds(rect, bounds);
+		if (IsEmpty(rect))
+			return;
+		lastCompositionStats_.composedRectCount++;
+		lastCompositionStats_.composedPixelArea += Area(rect);
+	};
+	const auto markComposedFrame = [&]() {
 		hasComposedFrame_ = true;
 		lastComposedPaletteVersion_ = palette_.version;
 		lastComposedDiagnosticTransformEnabled_ = diagnosticTransformEnabled_;
 		lastRenderLayerDiagnosticMode_ = renderLayerDiagnosticMode_;
+		outputSurfaceChangedSinceComposition_ = false;
+		indexBufferChangedSinceComposition_ = false;
+		logicalSizeChangedSinceComposition_ = false;
+	};
+	const auto composeRects = [&](std::vector<Rectangle> rects) {
+		const FrameCompositorBackendResult result = ComposeRects({
+		                                                             logicalSize_,
+		                                                             indexBuffer_,
+		                                                             palette_,
+		                                                             frame.dirtyRects,
+		                                                             diagnosticTransformEnabled_,
+		                                                             renderLayerDiagnosticMode_,
+		                                                             renderLayerMap_,
+		                                                             compositionSurfaceMetadata_,
+		                                                         },
+		    rects);
+		if (result == FrameCompositorBackendResult::NoFrameProduced) {
+			return false;
+		}
+		lastBackendResult_ = result;
+		directPresentationPending_ = UsesDirectPresentation(result);
+		lastComposedFrameUsedDirectPresentation_ = directPresentationPending_;
+		for (const Rectangle &rect : rects) {
+			recordComposedRect(rect);
+		}
+		markComposedFrame();
+		return true;
+	};
+
+	if (fullFrameReason != CompositionFullFrameReason::None) {
+		lastCompositionStats_.fullFrameComposed = true;
+		lastCompositionStats_.fullFrameReason = fullFrameReason;
+		composeRects({ { { 0, 0 }, logicalSize_ } });
+		SetRenderPerfCompositionStats(lastCompositionStats_);
+		return;
 	}
+
+	if (noDirtyRects && backend_ != nullptr && backend_->CanRetainDirectPresentation()) {
+		lastBackendResult_ = FrameCompositorBackendResult::RetainedDirectPresentation;
+		directPresentationPending_ = true;
+		lastComposedFrameUsedDirectPresentation_ = true;
+		markComposedFrame();
+		SetRenderPerfCompositionStats(lastCompositionStats_);
+		return;
+	}
+
+	composeRects(normalizedDirtyRects.dirtyRects.rects);
+	SetRenderPerfCompositionStats(lastCompositionStats_);
+}
+
+FrameCompositorBackendResult CpuPaletteCompositor::ComposeRects(const CompositionFrame &frame, const std::vector<Rectangle> &rects)
+{
+	if (rects.empty() || outputSurface_ == nullptr || backend_ == nullptr || !backend_->IsAvailable())
+		return FrameCompositorBackendResult::NoFrameProduced;
+
+	return backend_->Compose(frame, *outputSurface_, rects, lastCompositionStats_);
 }
 
 void CpuPaletteCompositor::Compose()
@@ -560,11 +1034,15 @@ void CpuPaletteCompositor::Compose()
 	    diagnosticTransformEnabled_,
 	    renderLayerDiagnosticMode_,
 	    renderLayerMap_,
+	    compositionSurfaceMetadata_,
 	});
 }
 
 void CpuPaletteCompositor::Present()
 {
+	if (backend_ != nullptr && directPresentationPending_)
+		backend_->Present();
+	directPresentationPending_ = false;
 	ResetDirtyRects();
 }
 
@@ -575,14 +1053,16 @@ bool FrameCompositionEnabled()
 
 void SubmitFrameCompositionDirtyRect(Rectangle rect)
 {
-	RecordRenderLayerDirtyRect(CurrentRenderLayer());
-	FrameCompositor.AddDirtyRect(rect);
+	const RenderLayer layer = CurrentRenderLayer();
+	RecordRenderLayerDirtyRect(layer);
+	FrameCompositor.AddDirtyRect(rect, CompositionSurfaceRoleForRenderLayer(layer));
 }
 
 void SubmitFrameCompositionFullFrame()
 {
-	RecordRenderLayerDirtyRect(CurrentRenderLayer());
-	FrameCompositor.SetFullFrameDirty();
+	const RenderLayer layer = CurrentRenderLayer();
+	RecordRenderLayerDirtyRect(layer);
+	FrameCompositor.SetFullFrameDirty(CompositionSurfaceRoleForRenderLayer(layer));
 }
 
 void ResetFrameCompositionDirtyRects()
@@ -590,22 +1070,44 @@ void ResetFrameCompositionDirtyRects()
 	FrameCompositor.ResetDirtyRects();
 }
 
-void ComposeFrameToOutput(SDL_Surface *outputSurface)
+bool ComposeFrameToOutput(SDL_Surface *outputSurface)
+{
+	if (!FrameCompositionEnabled()) {
+		SetRenderPerfCompositionStats({});
+		return false;
+	}
+
+	EnsureFrameCompositorBackend();
+	FrameCompositor.SetOutputSurface(outputSurface);
+	{
+		RenderPerfScope renderPerfScope(RenderPerfPhase::Compose);
+		FrameCompositor.Compose({
+		    { gnScreenWidth, gnScreenHeight },
+		    MakeIndexBufferView(*PalSurface),
+		    MakePaletteSnapshot(system_palette, SystemPaletteVersion()),
+		    FrameCompositor.GetDirtyRects(),
+		    *GetOptions().Experimental.renderFrameCompositorDiagnosticTransform,
+		    *GetOptions().Experimental.renderLayerDiagnosticMode,
+		    CurrentRenderLayerMapView(),
+		    FrameCompositor.GetCompositionSurfaceMetadata(),
+		});
+	}
+	const FrameCompositorBackendResult backendResult = FrameCompositor.GetLastBackendResult();
+	return UsesDirectPresentation(backendResult);
+}
+
+void PresentFrameComposition()
 {
 	if (!FrameCompositionEnabled())
 		return;
-
-	FrameCompositor.SetOutputSurface(outputSurface);
-	FrameCompositor.Compose({
-	    { gnScreenWidth, gnScreenHeight },
-	    MakeIndexBufferView(*PalSurface),
-	    MakePaletteSnapshot(system_palette, SystemPaletteVersion()),
-	    FrameCompositor.GetDirtyRects(),
-	    *GetOptions().Experimental.renderFrameCompositorDiagnosticTransform,
-	    *GetOptions().Experimental.renderLayerDiagnosticMode,
-	    CurrentRenderLayerMapView(),
-	});
 	FrameCompositor.Present();
+}
+
+void ShutdownFrameComposition()
+{
+	FrameCompositor.SetBackend(CreateCpuFrameCompositorBackend());
+	CurrentFrameCompositorBackendInitialized = false;
+	CurrentFrameCompositorBackend = RenderFrameCompositorBackend::CpuPalette;
 }
 
 } // namespace devilution

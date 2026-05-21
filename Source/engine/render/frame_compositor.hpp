@@ -7,6 +7,8 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
+#include <string_view>
 #include <vector>
 
 #ifdef USE_SDL3
@@ -18,6 +20,7 @@
 
 #include "engine/rectangle.hpp"
 #include "engine/render/render_layer_diagnostics.hpp"
+#include "engine/render/render_perf.hpp"
 #include "engine/size.hpp"
 #ifdef BUILD_TESTING
 #include "utils/attributes.h"
@@ -49,6 +52,28 @@ struct DirtyRectList {
 	bool fullFrame = false;
 };
 
+enum class CompositionSurfaceRole : uint8_t {
+	World,
+	WorldOverlay,
+	Interface,
+	Cursor,
+	DiagnosticOverlay,
+	Count,
+};
+
+inline constexpr size_t CompositionSurfaceRoleCount = static_cast<size_t>(CompositionSurfaceRole::Count);
+
+struct CompositionSurfaceRoleCoverage {
+	uint32_t dirtyRectCount = 0;
+	uint64_t dirtyPixelArea = 0;
+	Rectangle dirtyBounds;
+	bool fullFrameDirty = false;
+};
+
+struct CompositionSurfaceMetadata {
+	std::array<CompositionSurfaceRoleCoverage, CompositionSurfaceRoleCount> roles {};
+};
+
 struct CompositionFrame {
 	Size logicalSize;
 	IndexBufferView indexBuffer;
@@ -57,10 +82,34 @@ struct CompositionFrame {
 	bool diagnosticTransform = false;
 	RenderLayerDiagnosticMode renderLayerDiagnosticMode = RenderLayerDiagnosticMode::Off;
 	RenderLayerMapView renderLayerMap;
+	CompositionSurfaceMetadata compositionSurfaceMetadata;
+};
+
+enum class FrameCompositorBackendResult : uint8_t {
+	/** No CPU surface update and no direct presentation frame was produced for this composition pass. */
+	NoFrameProduced,
+	/** The CPU output surface now contains the composed frame; the caller must present it through the normal SDL path. */
+	UpdatedOutputSurface,
+	/** A backend-specific direct presentation frame was prepared; Present() must be called once to display it. */
+	PreparedDirectPresentation,
+	/** No new pixels were uploaded, but a previously prepared direct presentation frame is still valid for this frame. */
+	RetainedDirectPresentation,
+};
+
+class IFrameCompositorBackend {
+public:
+	virtual ~IFrameCompositorBackend() = default;
+
+	[[nodiscard]] virtual std::string_view Name() const = 0;
+	[[nodiscard]] virtual bool IsAvailable() const = 0;
+	[[nodiscard]] virtual bool CanRetainDirectPresentation() const { return false; }
+	[[nodiscard]] virtual FrameCompositorBackendResult Compose(const CompositionFrame &frame, SDL_Surface &outputSurface, const std::vector<Rectangle> &rects, RenderPerfCompositionStats &stats) = 0;
+	virtual void Present() { }
 };
 
 [[nodiscard]] IndexBufferView MakeIndexBufferView(const SDL_Surface &surface);
 [[nodiscard]] PaletteSnapshot MakePaletteSnapshot(const std::array<SDL_Color, 256> &palette, uint64_t version);
+[[nodiscard]] std::unique_ptr<IFrameCompositorBackend> CreateCpuFrameCompositorBackend();
 
 class IFrameCompositor {
 public:
@@ -77,6 +126,9 @@ public:
 
 class CpuPaletteCompositor final : public IFrameCompositor {
 public:
+	CpuPaletteCompositor();
+	explicit CpuPaletteCompositor(std::unique_ptr<IFrameCompositorBackend> backend);
+
 	void BeginFrame(Size logicalSize) override;
 	void SubmitIndexBuffer(IndexBufferView indexBuffer) override;
 	void SubmitPalette(const PaletteSnapshot &palette) override;
@@ -87,18 +139,26 @@ public:
 
 	void SetOutputSurface(SDL_Surface *outputSurface);
 	void AddDirtyRect(Rectangle rect);
+	void AddDirtyRect(Rectangle rect, CompositionSurfaceRole role);
 	void SetFullFrameDirty();
+	void SetFullFrameDirty(CompositionSurfaceRole role);
 	void ResetDirtyRects();
 	void SetDiagnosticTransformEnabled(bool enabled);
+	void SetBackend(std::unique_ptr<IFrameCompositorBackend> backend);
 	[[nodiscard]] const DirtyRectList &GetDirtyRects() const;
+	[[nodiscard]] const CompositionSurfaceMetadata &GetCompositionSurfaceMetadata() const;
+	[[nodiscard]] const RenderPerfCompositionStats &GetLastCompositionStats() const;
+	[[nodiscard]] FrameCompositorBackendResult GetLastBackendResult() const;
 
 private:
-	[[nodiscard]] bool ComposeRect(Rectangle rect);
+	[[nodiscard]] FrameCompositorBackendResult ComposeRects(const CompositionFrame &frame, const std::vector<Rectangle> &rects);
 
+	std::unique_ptr<IFrameCompositorBackend> backend_;
 	Size logicalSize_ {};
 	IndexBufferView indexBuffer_ {};
 	PaletteSnapshot palette_ {};
 	DirtyRectList dirtyRects_ {};
+	CompositionSurfaceMetadata compositionSurfaceMetadata_ {};
 	SDL_Surface *outputSurface_ = nullptr;
 	bool diagnosticTransformEnabled_ = false;
 	RenderLayerDiagnosticMode renderLayerDiagnosticMode_ = RenderLayerDiagnosticMode::Off;
@@ -107,13 +167,22 @@ private:
 	uint64_t lastComposedPaletteVersion_ = 0;
 	bool lastComposedDiagnosticTransformEnabled_ = false;
 	RenderLayerDiagnosticMode lastRenderLayerDiagnosticMode_ = RenderLayerDiagnosticMode::Off;
+	bool outputSurfaceChangedSinceComposition_ = false;
+	bool indexBufferChangedSinceComposition_ = false;
+	bool logicalSizeChangedSinceComposition_ = false;
+	bool directPresentationPending_ = false;
+	bool lastComposedFrameUsedDirectPresentation_ = false;
+	FrameCompositorBackendResult lastBackendResult_ = FrameCompositorBackendResult::NoFrameProduced;
+	RenderPerfCompositionStats lastCompositionStats_ {};
 };
 
 [[nodiscard]] bool FrameCompositionEnabled();
 void SubmitFrameCompositionDirtyRect(Rectangle rect);
 void SubmitFrameCompositionFullFrame();
 void ResetFrameCompositionDirtyRects();
-void ComposeFrameToOutput(SDL_Surface *outputSurface);
+[[nodiscard]] bool ComposeFrameToOutput(SDL_Surface *outputSurface);
+void PresentFrameComposition();
+void ShutdownFrameComposition();
 
 #ifdef BUILD_TESTING
 void DVL_API_FOR_TEST SetFrameCompositorThreadCountOverrideForTesting(int threadCount);

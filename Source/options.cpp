@@ -63,10 +63,6 @@ namespace devilution {
 #ifndef DEFAULT_AUDIO_RESAMPLING_QUALITY
 #define DEFAULT_AUDIO_RESAMPLING_QUALITY 3
 #endif
-#ifndef DEFAULT_PER_PIXEL_LIGHTING
-#define DEFAULT_PER_PIXEL_LIGHTING true
-#endif
-
 namespace {
 
 void DiscoverMods()
@@ -788,7 +784,6 @@ GraphicsOptions::GraphicsOptions()
           })
     , brightness("Brightness Correction", OptionEntryFlags::Invisible, "Brightness Correction", "Brightness correction level.", 0)
     , zoom("Zoom", OptionEntryFlags::None, N_("Zoom"), N_("Zoom on when enabled."), false)
-    , perPixelLighting("Per-pixel Lighting", OptionEntryFlags::None, N_("Per-pixel Lighting"), N_("Subtile lighting for smoother light gradients."), DEFAULT_PER_PIXEL_LIGHTING)
     , colorCycling("Color Cycling", OptionEntryFlags::None, N_("Color Cycling"), N_("Color cycling effect used for water, lava, and acid animation."), true)
     , alternateNestArt("Alternate nest art", OptionEntryFlags::OnlyHellfire | OptionEntryFlags::CantChangeInGame, N_("Alternate nest art"), N_("The game will use an alternative palette for Hellfire’s nest tileset."), false)
 #if SDL_VERSION_ATLEAST(2, 0, 0)
@@ -819,7 +814,6 @@ std::vector<OptionEntryBase *> GraphicsOptions::GetEntries()
 		&brightness,
 		&zoom,
 		&showFPS,
-		&perPixelLighting,
 		&colorCycling,
 		&alternateNestArt,
 #if SDL_VERSION_ATLEAST(2, 0, 0)
@@ -834,6 +828,12 @@ std::vector<OptionEntryBase *> GraphicsOptions::GetEntries()
 ExperimentalOptions::ExperimentalOptions()
     : OptionCategoryBase("Experimental", N_("Experimental"), N_("Experimental Settings"))
     , renderFrameCompositor("Render Frame Compositor", OptionEntryFlags::CantChangeInGame | OptionEntryFlags::RecreateUI, N_("Render Frame Compositor"), N_("Use the experimental final frame compositor path."), false)
+    , renderFrameCompositorBackend("Render Frame Compositor Backend", OptionEntryFlags::CantChangeInGame | OptionEntryFlags::RecreateUI, N_("Render Frame Compositor Backend"), N_("Select the experimental final frame compositor backend."), RenderFrameCompositorBackend::CpuPalette,
+          {
+              { RenderFrameCompositorBackend::CpuPalette, N_("CPU Palette") },
+              { RenderFrameCompositorBackend::OpenGlPalette, N_("OpenGL Palette") },
+              { RenderFrameCompositorBackend::SdlGpuPalette, N_("SDL_GPU Palette") },
+          })
     , renderFrameCompositorDiagnosticTransform("Render Compositor Diagnostic Transform", OptionEntryFlags::None, N_("Render Compositor Diagnostic Transform"), N_("Apply a visible RGB transform after palette expansion to verify the experimental compositor path."), false)
     , renderLayerDiagnosticMode("Render Layer Diagnostics", OptionEntryFlags::None, N_("Render Layer Diagnostics"), N_("Visualize render layer ownership in the experimental frame compositor."), RenderLayerDiagnosticMode::Off,
           {
@@ -842,6 +842,7 @@ ExperimentalOptions::ExperimentalOptions()
               { RenderLayerDiagnosticMode::Outline, N_("Outline") },
               { RenderLayerDiagnosticMode::TintAndOutline, N_("Tint + Outline") },
           })
+    , renderPerformanceStats("Render Performance Stats", OptionEntryFlags::None, N_("Render Performance Stats"), N_("Log renderer performance telemetry once per second."), false)
 {
 }
 
@@ -849,8 +850,10 @@ std::vector<OptionEntryBase *> ExperimentalOptions::GetEntries()
 {
 	return {
 		&renderFrameCompositor,
+		&renderFrameCompositorBackend,
 		&renderFrameCompositorDiagnosticTransform,
 		&renderLayerDiagnosticMode,
+		&renderPerformanceStats,
 	};
 }
 

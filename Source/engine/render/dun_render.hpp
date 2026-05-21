@@ -9,7 +9,6 @@
 #include <cstdint>
 
 #include "engine/point.hpp"
-#include "engine/render/light_render.hpp"
 #include "engine/surface.hpp"
 #include "levels/dun_tile.hpp"
 #include "utils/attributes.h"
@@ -114,7 +113,7 @@ std::string_view MaskTypeToString(MaskType maskType);
 /**
  * @brief Low-level tile rendering function.
  */
-void RenderTileFrame(const Surface &out, const Lightmap &lightmap, const Point &position, TileType tile, const uint8_t *src, int_fast16_t height,
+void RenderTileFrame(const Surface &out, const Point &position, TileType tile, const uint8_t *src, int_fast16_t height,
     MaskType maskType, const uint8_t *tbl);
 
 /**
@@ -137,18 +136,17 @@ DVL_ALWAYS_INLINE const uint8_t *GetDunFrameFoliage(const std::byte *dungeonCelD
 /**
  * @brief Blit current world CEL to the given buffer
  * @param out Target buffer
- * @param lightmap Per-pixel light buffer
  * @param position Target buffer coordinates
  * @param dungeonCelData Dungeon CEL data.
  * @param levelCelBlock The MIN block of the level CEL file.
  * @param maskType The mask to use,
  * @param tbl LightTable or TRN for a tile.
  */
-DVL_ALWAYS_INLINE void RenderTile(const Surface &out, const Lightmap &lightmap, const Point &position,
+DVL_ALWAYS_INLINE void RenderTile(const Surface &out, const Point &position,
     const std::byte *dungeonCelData, LevelCelBlock levelCelBlock, MaskType maskType, const uint8_t *tbl)
 {
 	const TileType tileType = levelCelBlock.type();
-	RenderTileFrame(out, lightmap, position, tileType,
+	RenderTileFrame(out, position, tileType,
 	    GetDunFrame(dungeonCelData, levelCelBlock.frame()),
 	    (tileType == TileType::LeftTriangle || tileType == TileType::RightTriangle)
 	        ? DunFrameTriangleHeight
@@ -159,10 +157,10 @@ DVL_ALWAYS_INLINE void RenderTile(const Surface &out, const Lightmap &lightmap, 
 /**
  * @brief Renders a floor foliage tile.
  */
-DVL_ALWAYS_INLINE void RenderTileFoliage(const Surface &out, const Lightmap &lightmap, const Point &position,
+DVL_ALWAYS_INLINE void RenderTileFoliage(const Surface &out, const Point &position,
     const std::byte *dungeonCelData, LevelCelBlock levelCelBlock, const uint8_t *tbl)
 {
-	RenderTileFrame(out, lightmap, Point { position.x, position.y - 16 }, TileType::TransparentSquare,
+	RenderTileFrame(out, Point { position.x, position.y - 16 }, TileType::TransparentSquare,
 	    GetDunFrameFoliage(dungeonCelData, levelCelBlock.frame()), /*height=*/16, MaskType::Solid, tbl);
 }
 

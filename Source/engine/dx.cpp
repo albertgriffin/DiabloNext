@@ -20,8 +20,10 @@
 #include "controls/control_mode.hpp"
 #include "controls/plrctrls.h"
 #include "engine/palette.h"
+#include "engine/render/accelerated_compositor_lifecycle.hpp"
 #include "engine/render/frame_compositor.hpp"
 #include "engine/render/primitive_render.hpp"
+#include "engine/render/render_perf.hpp"
 #include "headless_mode.hpp"
 #include "init.hpp"
 #include "options.h"
@@ -83,6 +85,15 @@ bool CanRenderDirectlyToOutputSurface()
 #endif
 }
 
+bool ShouldLimitFrameRateAfterPresent()
+{
+#ifndef USE_SDL1
+	return *GetOptions().Graphics.frameRateControl != FrameRateControl::VerticalSync;
+#else
+	return true;
+#endif
+}
+
 /**
  * @brief Limit FPS to avoid high CPU load, use when v-sync isn't available
  */
@@ -126,6 +137,8 @@ void dx_cleanup()
 		SDL_HideWindow(ghMainWnd);
 #endif
 
+	ShutdownFrameComposition();
+	ShutdownAcceleratedFrameCompositor();
 	PalSurface = nullptr;
 	PinnedPalSurface = nullptr;
 	Palette = nullptr;
@@ -133,7 +146,7 @@ void dx_cleanup()
 #ifndef USE_SDL1
 	texture = nullptr;
 	FreeVirtualGamepadTextures();
-	if (*GetOptions().Graphics.upscale)
+	if (renderer != nullptr)
 		SDL_DestroyRenderer(renderer);
 #endif
 	SDL_DestroyWindow(ghMainWnd);
@@ -255,51 +268,73 @@ void RenderPresent()
 		return;
 	}
 
-	ComposeFrameToOutput(surface);
+	const bool frameCompositorPreparedDirectPresentation = ComposeFrameToOutput(surface);
+	if (frameCompositorPreparedDirectPresentation) {
+		{
+			RenderPerfScope renderPerfScope(RenderPerfPhase::Present);
+			PresentFrameComposition();
+		}
+		if (ShouldLimitFrameRateAfterPresent()) {
+			LimitFrameRate();
+		}
+		return;
+	}
 
 #ifndef USE_SDL1
 	if (renderer != nullptr) {
+		{
+			RenderPerfScope renderPerfScope(RenderPerfPhase::Present);
 #ifdef USE_SDL3
-		if (!SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255)) ErrSdl();
-		if (!SDL_RenderClear(renderer)) ErrSdl();
-		if (!SDL_UpdateTexture(texture.get(), nullptr, surface->pixels, surface->pitch)) ErrSdl();
-		if (!SDL_RenderTexture(renderer, texture.get(), nullptr, nullptr)) ErrSdl();
+			if (!SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255)) ErrSdl();
+			if (!SDL_RenderClear(renderer)) ErrSdl();
+			if (!SDL_UpdateTexture(texture.get(), nullptr, surface->pixels, surface->pitch)) ErrSdl();
+			if (!SDL_RenderTexture(renderer, texture.get(), nullptr, nullptr)) ErrSdl();
 #else
-		if (SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255) <= -1) ErrSdl();
-		if (SDL_RenderClear(renderer) <= -1) ErrSdl();
-		if (SDL_UpdateTexture(texture.get(), nullptr, surface->pixels, surface->pitch) <= -1) ErrSdl();
-		if (SDL_RenderCopy(renderer, texture.get(), nullptr, nullptr) <= -1) ErrSdl();
+			if (SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255) <= -1) ErrSdl();
+			if (SDL_RenderClear(renderer) <= -1) ErrSdl();
+			if (SDL_UpdateTexture(texture.get(), nullptr, surface->pixels, surface->pitch) <= -1) ErrSdl();
+			if (SDL_RenderCopy(renderer, texture.get(), nullptr, nullptr) <= -1) ErrSdl();
 #endif
 
-		if (ControlMode == ControlTypes::VirtualGamepad) {
-			RenderVirtualGamepad(renderer);
+			if (ControlMode == ControlTypes::VirtualGamepad) {
+				RenderVirtualGamepad(renderer);
+			}
+			SDL_RenderPresent(renderer);
 		}
-		SDL_RenderPresent(renderer);
+		PresentFrameComposition();
 
-		if (*GetOptions().Graphics.frameRateControl != FrameRateControl::VerticalSync) {
+		if (ShouldLimitFrameRateAfterPresent()) {
 			LimitFrameRate();
 		}
 	} else {
-		if (ControlMode == ControlTypes::VirtualGamepad) {
-			RenderVirtualGamepad(surface);
-		}
+		{
+			RenderPerfScope renderPerfScope(RenderPerfPhase::Present);
+			if (ControlMode == ControlTypes::VirtualGamepad) {
+				RenderVirtualGamepad(surface);
+			}
 
 #ifdef USE_SDL3
-		if (!SDL_UpdateWindowSurface(ghMainWnd)) ErrSdl();
+			if (!SDL_UpdateWindowSurface(ghMainWnd)) ErrSdl();
 #else
-		if (SDL_UpdateWindowSurface(ghMainWnd) <= -1) ErrSdl();
+			if (SDL_UpdateWindowSurface(ghMainWnd) <= -1) ErrSdl();
 #endif
 
-		if (RenderDirectlyToOutputSurface)
-			PalSurface = GetOutputSurface();
+			if (RenderDirectlyToOutputSurface)
+				PalSurface = GetOutputSurface();
+		}
+		PresentFrameComposition();
 		LimitFrameRate();
 	}
 #else
-	if (SDL_Flip(surface) <= -1) {
-		ErrSdl();
+	{
+		RenderPerfScope renderPerfScope(RenderPerfPhase::Present);
+		if (SDL_Flip(surface) <= -1) {
+			ErrSdl();
+		}
 	}
 	if (RenderDirectlyToOutputSurface)
 		PalSurface = GetOutputSurface();
+	PresentFrameComposition();
 	LimitFrameRate();
 #endif
 }
