@@ -86,6 +86,10 @@ set(devilutionx_fixtures
   timedemo/WarriorLevel1to2/demo_0.dmo
   timedemo/WarriorLevel1to2/demo_0_reference_spawn_0.sv
   timedemo/WarriorLevel1to2/spawn_0.sv
+  timedemo/RenderTelemetryHellfireDemo1/README.md
+  timedemo/RenderTelemetryHellfireDemo1/demo_1.dmo
+  timedemo/RenderTelemetryHellfireDemo1/demo_1_reference_single_0.hsv
+  timedemo/RenderTelemetryHellfireDemo1/single_0.hsv
   txtdata/cr.tsv
   txtdata/crlf.tsv
   txtdata/empty.tsv
