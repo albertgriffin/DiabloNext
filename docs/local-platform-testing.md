@@ -16,6 +16,38 @@ DATA_DIR="$HOME/Library/Application Support/diasurgical/devilution"
 The runner validates that `diabdat.mpq`, `hellfire.mpq`, `hfmonk.mpq`,
 `hfmusic.mpq`, and `hfvoice.mpq` are present. File name case does not matter.
 
+## Local Commit Formatting
+
+Install the versioned pre-commit hook once per clone:
+
+```bash
+tools/install_git_hooks.sh
+```
+
+This sets `core.hooksPath` to `.githooks`. Linked worktrees from the same clone
+share that Git config, so newly created worktrees use the hook automatically.
+Fresh clones need the install step again.
+
+The pre-commit hook runs:
+
+```bash
+tools/check_clang_format_changed.sh --staged --fix
+```
+
+It formats staged C/C++ files under `Source/` and `test/` with clang-format 18,
+then re-stages the formatted files. The script uses a local clang-format 18 when
+available and falls back to `ghcr.io/jidicula/clang-format:18` through Docker.
+
+Run the same changed-file check manually before pushing:
+
+```bash
+tools/check_clang_format_changed.sh --base origin/master --head HEAD
+```
+
+The branch check compares from `merge-base(origin/master, HEAD)` to `HEAD`, so a
+branch that is behind `origin/master` does not format-check C++ files that only
+changed on `origin/master`.
+
 ## Native macOS arm64
 
 Install dependencies, build the game, and run the preserved Hellfire fixture:
