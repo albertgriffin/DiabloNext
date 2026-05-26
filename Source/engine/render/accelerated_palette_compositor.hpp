@@ -44,7 +44,14 @@ struct CompositionLightingBufferView {
 struct CompositionLightingInputs {
 	CompositionLightingBufferView light;
 	CompositionLightingBufferView shadow;
+	RenderSmoothLightSourceView smoothLightSources;
+	Point classicLightFirstTile;
+	Displacement classicLightOffset;
+	int classicLightViewportHeight = 0;
 	RenderLightShadowDiagnosticMode diagnosticMode = RenderLightShadowDiagnosticMode::Off;
+	bool lightStoresClassicLightLevels = false;
+	bool lightStoresDungeonGrid = false;
+	bool smoothPresentation = false;
 };
 
 class NeutralCompositionLightingInputs {
@@ -72,6 +79,21 @@ private:
 	uint64_t version_ = 1;
 };
 
+class ClassicCompositionLightingInputs {
+public:
+	[[nodiscard]] const CompositionLightingInputs *Prepare(Size size, RenderClassicLightMapView classicLightMap, RenderSmoothLightSourceView smoothLightSources = {}, RenderLayerMapView renderLayerMap = {}, const DirtyRectList &dirtyRects = {}, RenderLightShadowDiagnosticMode diagnosticMode = RenderLightShadowDiagnosticMode::Off);
+	[[nodiscard]] const CompositionLightingInputs *Get() const;
+
+private:
+	Size size_ {};
+	CompositionLightingInputs inputs_ {};
+	std::vector<uint8_t> shadowPixels_;
+	bool shadowMaskInitialized_ = false;
+	bool shadowMaskUsesLayerMap_ = false;
+	uint64_t shadowLayerMapVersion_ = 0;
+	uint64_t shadowVersion_ = 1;
+};
+
 struct AcceleratedPaletteFrame {
 	const CompositionFrame &composition;
 	const CompositionLightingInputs *lighting = nullptr;
@@ -92,6 +114,7 @@ public:
 [[nodiscard]] bool AcceleratedPaletteFrameRequiresCpuPixels(const CompositionFrame &frame);
 [[nodiscard]] const CompositionLightingInputs *PrepareNeutralCompositionLightingInputs(Size size);
 [[nodiscard]] const CompositionLightingInputs *PrepareDevelopmentCompositionLightingInputs(Size size, RenderLightShadowDiagnosticMode mode, RenderLayerMapView renderLayerMap = {});
+[[nodiscard]] const CompositionLightingInputs *PrepareClassicCompositionLightingInputs(Size size, RenderClassicLightMapView classicLightMap, RenderSmoothLightSourceView smoothLightSources = {}, RenderLayerMapView renderLayerMap = {}, const DirtyRectList &dirtyRects = {}, RenderLightShadowDiagnosticMode diagnosticMode = RenderLightShadowDiagnosticMode::Off);
 [[nodiscard]] std::unique_ptr<IFrameCompositorBackend> CreateAcceleratedPaletteCompositorBackend(std::unique_ptr<IAcceleratedPalettePresenter> presenter, const CompositionLightingInputs *lightingInputs = nullptr);
 
 } // namespace devilution

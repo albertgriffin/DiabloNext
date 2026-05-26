@@ -68,6 +68,7 @@ enum class CompositionFullFrameReason : uint8_t {
 	WorldMaskDiagnosticsRequested,
 	WorldProxyDiagnosticModeChanged,
 	WorldProxyDiagnosticsRequested,
+	ClassicLightMapChanged,
 };
 
 enum class CompositionUploadFallbackReason : uint8_t {
@@ -128,6 +129,11 @@ struct RenderPerfFrameStats {
 	uint64_t worldProxyPrimitiveCount = 0;
 	uint64_t worldProxyActorPrimitiveCount = 0;
 	uint64_t worldProxyPixelCount = 0;
+	uint64_t automapOverlayRectCount = 0;
+	uint64_t automapOverlayVertexCount = 0;
+	uint64_t automapOverlayUploadBytes = 0;
+	uint64_t automapOverlayUploadCount = 0;
+	uint64_t automapOverlaySkippedUploadCount = 0;
 };
 
 struct RenderPerfRollingStats {
@@ -148,6 +154,11 @@ struct RenderPerfRollingStats {
 	uint64_t worldProxyPrimitiveCount = 0;
 	uint64_t worldProxyActorPrimitiveCount = 0;
 	uint64_t worldProxyPixelCount = 0;
+	uint64_t automapOverlayRectCount = 0;
+	uint64_t automapOverlayVertexCount = 0;
+	uint64_t automapOverlayUploadBytes = 0;
+	uint64_t automapOverlayUploadCount = 0;
+	uint64_t automapOverlaySkippedUploadCount = 0;
 	uint64_t uploadBytes = 0;
 	uint64_t uploadedRectCount = 0;
 	uint64_t skippedUploadCount = 0;
@@ -185,6 +196,7 @@ void SetRenderPerfCompositionStats(const RenderPerfCompositionStats &stats);
 void SetRenderPerfLayerCaptureStats(uint64_t stampedSpanCount, uint64_t stampedPixelCount);
 void SetRenderPerfWorldMaskStats(uint64_t stampedSpanCount, uint64_t stampedPixelCount);
 void SetRenderPerfWorldProxyStats(uint64_t primitiveCount, uint64_t actorPrimitiveCount, uint64_t pixelCount);
+void AddRenderPerfAutomapOverlayStats(uint64_t rectCount, uint64_t vertexCount, uint64_t uploadBytes, bool uploaded, bool skippedUpload);
 
 class RenderPerfScope {
 public:

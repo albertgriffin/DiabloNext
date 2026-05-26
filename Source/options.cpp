@@ -835,6 +835,7 @@ ExperimentalOptions::ExperimentalOptions()
               { RenderFrameCompositorBackend::SdlGpuPalette, N_("SDL_GPU Palette") },
           })
     , renderFrameCompositorDiagnosticTransform("Render Compositor Diagnostic Transform", OptionEntryFlags::None, N_("Render Compositor Diagnostic Transform"), N_("Apply a visible RGB transform after palette expansion to verify the experimental compositor path."), false)
+    , renderAcceleratedClassicLighting("Render Accelerated Classic Lighting", OptionEntryFlags::None, N_("Render Accelerated Classic Lighting"), N_("Recreate classic world lighting in SDL_GPU RGB space from unlit indexed world input."), false)
     , renderLayerDiagnosticMode("Render Layer Diagnostics", OptionEntryFlags::None, N_("Render Layer Diagnostics"), N_("Visualize render layer ownership in the experimental frame compositor."), RenderLayerDiagnosticMode::Off,
           {
               { RenderLayerDiagnosticMode::Off, N_("Off") },
@@ -879,6 +880,7 @@ std::vector<OptionEntryBase *> ExperimentalOptions::GetEntries()
 		&renderFrameCompositor,
 		&renderFrameCompositorBackend,
 		&renderFrameCompositorDiagnosticTransform,
+		&renderAcceleratedClassicLighting,
 		&renderLayerDiagnosticMode,
 		&renderLightShadowDiagnosticMode,
 		&renderWorldMaskDiagnosticMode,

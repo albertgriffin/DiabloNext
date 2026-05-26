@@ -163,6 +163,20 @@ Size GetPreferredWindowSize()
 const auto OptionChangeHandlerResolution = (GetOptions().Graphics.resolution.SetValueChangedCallback(ResizeWindow), true);
 const auto OptionChangeHandlerFullscreen = (GetOptions().Graphics.fullscreen.SetValueChangedCallback(SetFullscreenMode), true);
 
+void OptionFrameCompositorChanged()
+{
+#ifndef USE_SDL1
+	if (ghMainWnd == nullptr)
+		return;
+
+	ReinitializeRenderer();
+	CreateBackBuffer();
+	RedrawEverything();
+#endif
+}
+const auto OptionChangeHandlerFrameCompositor = (GetOptions().Experimental.renderFrameCompositor.SetValueChangedCallback(OptionFrameCompositorChanged), true);
+const auto OptionChangeHandlerFrameCompositorBackend = (GetOptions().Experimental.renderFrameCompositorBackend.SetValueChangedCallback(OptionFrameCompositorChanged), true);
+
 void OptionGrabInputChanged()
 {
 #ifdef USE_SDL3
@@ -771,6 +785,8 @@ void ReinitializeRenderer()
 #endif
 			return;
 		}
+		ShutdownAcceleratedFrameCompositor();
+	} else {
 		ShutdownAcceleratedFrameCompositor();
 	}
 

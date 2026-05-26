@@ -571,6 +571,8 @@ struct ExperimentalOptions : OptionCategoryBase {
 	OptionEntryEnum<RenderFrameCompositorBackend> renderFrameCompositorBackend;
 	/** @brief Apply a visible RGB transform in the experimental frame compositor. */
 	OptionEntryBoolean renderFrameCompositorDiagnosticTransform;
+	/** @brief Recreate classic world lighting in the SDL_GPU compositor. */
+	OptionEntryBoolean renderAcceleratedClassicLighting;
 	/** @brief Visualize render layer ownership in the experimental frame compositor. */
 	OptionEntryEnum<RenderLayerDiagnosticMode> renderLayerDiagnosticMode;
 	/** @brief Enable development light/shadow diagnostics in the accelerated compositor. */

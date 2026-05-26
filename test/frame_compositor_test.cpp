@@ -17,6 +17,7 @@
 #include "engine/render/accelerated_palette_compositor.hpp"
 #include "engine/render/frame_compositor.hpp"
 #include "engine/render/render_layer.hpp"
+#include "lighting.h"
 #include "options.h"
 #include "utils/sdl_wrap.h"
 
@@ -76,6 +77,61 @@ public:
 
 private:
 	RenderLightShadowDiagnosticMode previousMode_;
+};
+
+class RenderAcceleratedClassicLightingGuard {
+public:
+	explicit RenderAcceleratedClassicLightingGuard(const bool enabled)
+	    : previousEnabled_(*GetOptions().Experimental.renderAcceleratedClassicLighting)
+	{
+		GetOptions().Experimental.renderAcceleratedClassicLighting.SetValue(enabled);
+	}
+
+	~RenderAcceleratedClassicLightingGuard()
+	{
+		GetOptions().Experimental.renderAcceleratedClassicLighting.SetValue(previousEnabled_);
+	}
+
+private:
+	bool previousEnabled_;
+};
+
+class RenderFrameCompositorBackendGuard {
+public:
+	explicit RenderFrameCompositorBackendGuard(const RenderFrameCompositorBackend backend)
+	    : previousBackend_(*GetOptions().Experimental.renderFrameCompositorBackend)
+	{
+		GetOptions().Experimental.renderFrameCompositorBackend.SetValue(backend);
+	}
+
+	~RenderFrameCompositorBackendGuard()
+	{
+		GetOptions().Experimental.renderFrameCompositorBackend.SetValue(previousBackend_);
+	}
+
+private:
+	RenderFrameCompositorBackend previousBackend_;
+};
+
+class LightTableEntryGuard {
+public:
+	LightTableEntryGuard(const uint8_t lightLevel, const uint8_t paletteIndex, const uint8_t replacement)
+	    : lightLevel_(lightLevel)
+	    , paletteIndex_(paletteIndex)
+	    , previous_(LightTables[lightLevel][paletteIndex])
+	{
+		LightTables[lightLevel_][paletteIndex_] = replacement;
+	}
+
+	~LightTableEntryGuard()
+	{
+		LightTables[lightLevel_][paletteIndex_] = previous_;
+	}
+
+private:
+	uint8_t lightLevel_;
+	uint8_t paletteIndex_;
+	uint8_t previous_;
 };
 
 class RecordingFrameCompositorBackend final : public IFrameCompositorBackend {
@@ -323,6 +379,183 @@ TEST(FrameCompositor, DevelopmentCompositionLightingInputsNeutralizeNonWorldLaye
 	EXPECT_EQ(prepared->shadow.pixels[4], 0);
 }
 
+TEST(FrameCompositor, ClassicCompositionLightingInputsForwardClassicLightLevelsToShader)
+{
+	std::array<uint8_t, 4> classicLightMap { 0, LightsMax, NonWorldRenderClassicLightLevel, NonWorldRenderClassicLightLevel };
+	std::array<uint8_t, 4> layerMap {
+		static_cast<uint8_t>(RenderLayer::World),
+		static_cast<uint8_t>(RenderLayer::World),
+		static_cast<uint8_t>(RenderLayer::Interface),
+		static_cast<uint8_t>(RenderLayer::Cursor),
+	};
+	DirtyRectList dirtyRects;
+	dirtyRects.rects.push_back({ { 1, 0 }, { 1, 1 } });
+	ClassicCompositionLightingInputs lightingInputs;
+
+	const CompositionLightingInputs *prepared = lightingInputs.Prepare({ 4, 1 }, { classicLightMap.data(), 4, 1, 4, 12 }, {}, { layerMap.data(), 4, 1, 4 }, dirtyRects);
+
+	ASSERT_NE(prepared, nullptr);
+	EXPECT_EQ(prepared->diagnosticMode, RenderLightShadowDiagnosticMode::Off);
+	EXPECT_EQ(prepared->light.size, Size(4, 1));
+	EXPECT_EQ(prepared->light.pitch, 4);
+	EXPECT_EQ(prepared->light.format, CompositionLightingBufferFormat::Alpha8);
+	EXPECT_TRUE(prepared->lightStoresClassicLightLevels);
+	EXPECT_EQ(prepared->light.pixels, classicLightMap.data());
+	EXPECT_EQ(prepared->shadow.size, Size(4, 1));
+	EXPECT_EQ(prepared->shadow.pitch, 4);
+	EXPECT_EQ(prepared->light.pixels[0], 0);
+	EXPECT_EQ(prepared->light.pixels[1], LightsMax);
+	EXPECT_EQ(prepared->light.pixels[2], NonWorldRenderClassicLightLevel);
+	EXPECT_EQ(prepared->light.pixels[3], NonWorldRenderClassicLightLevel);
+	EXPECT_EQ(prepared->shadow.pixels[0], 0);
+	EXPECT_EQ(prepared->shadow.pixels[1], 0);
+	ASSERT_EQ(prepared->light.dirtyRects.rects.size(), 1);
+	EXPECT_EQ(prepared->light.dirtyRects.rects[0].position.x, 1);
+}
+
+TEST(FrameCompositor, ClassicCompositionLightingInputsForwardGeneratedIntensityToShader)
+{
+	std::array<uint8_t, 2> classicLightMap { 170, 255 };
+	ClassicCompositionLightingInputs lightingInputs;
+
+	const CompositionLightingInputs *prepared = lightingInputs.Prepare({ 2, 1 }, { classicLightMap.data(), 2, 1, 2, 12, true });
+
+	ASSERT_NE(prepared, nullptr);
+	EXPECT_EQ(prepared->light.format, CompositionLightingBufferFormat::Alpha8);
+	EXPECT_FALSE(prepared->lightStoresClassicLightLevels);
+	EXPECT_FALSE(prepared->smoothPresentation);
+	EXPECT_EQ(prepared->light.pixels, classicLightMap.data());
+	EXPECT_EQ(prepared->light.pixels[0], 170);
+	EXPECT_EQ(prepared->light.pixels[1], 255);
+}
+
+TEST(FrameCompositor, ClassicCompositionLightingInputsForwardDungeonGridToShader)
+{
+	std::array<uint8_t, 4> classicLightGrid { 0, 5, 10, LightsMax };
+	DirtyRectList dirtyRects;
+	dirtyRects.rects.push_back({ { 4, 3 }, { 1, 1 } });
+	ClassicCompositionLightingInputs lightingInputs;
+
+	const CompositionLightingInputs *prepared = lightingInputs.Prepare(
+	    { 64, 32 },
+	    { classicLightGrid.data(), 2, 2, 2, 33, false, true, { 7, 11 }, { 3, -5 }, 24 },
+	    {},
+	    {},
+	    dirtyRects);
+
+	ASSERT_NE(prepared, nullptr);
+	EXPECT_EQ(prepared->light.size, Size(2, 2));
+	EXPECT_EQ(prepared->light.pitch, 2);
+	EXPECT_EQ(prepared->light.pixels, classicLightGrid.data());
+	EXPECT_EQ(prepared->light.version, 33);
+	EXPECT_TRUE(prepared->light.dirtyRects.fullFrame);
+	EXPECT_TRUE(prepared->lightStoresClassicLightLevels);
+	EXPECT_TRUE(prepared->lightStoresDungeonGrid);
+	EXPECT_FALSE(prepared->smoothPresentation);
+	EXPECT_EQ(prepared->classicLightFirstTile, Point(7, 11));
+	EXPECT_EQ(prepared->classicLightOffset, Displacement(3, -5));
+	EXPECT_EQ(prepared->classicLightViewportHeight, 24);
+}
+
+TEST(FrameCompositor, ClassicCompositionLightingInputsBuildsDirtyNeutralShadowForDungeonGrid)
+{
+	std::array<uint8_t, 4> classicLightGrid { 0, 5, 10, LightsMax };
+	std::array<uint8_t, 4> layerMap {
+		static_cast<uint8_t>(RenderLayer::World),
+		static_cast<uint8_t>(RenderLayer::WorldOverlay),
+		static_cast<uint8_t>(RenderLayer::Interface),
+		static_cast<uint8_t>(RenderLayer::Debug),
+	};
+	ClassicCompositionLightingInputs lightingInputs;
+
+	const CompositionLightingInputs *prepared = lightingInputs.Prepare(
+	    { 2, 2 },
+	    { classicLightGrid.data(), 2, 2, 2, 33, false, true, { 7, 11 }, { 3, -5 }, 2 },
+	    {},
+	    { layerMap.data(), 2, 2, 2, nullptr, 0, false, 1 });
+
+	ASSERT_NE(prepared, nullptr);
+	ASSERT_NE(prepared->shadow.pixels, nullptr);
+	EXPECT_EQ(prepared->shadow.version, 1);
+	EXPECT_TRUE(prepared->shadow.dirtyRects.fullFrame);
+	EXPECT_EQ(prepared->shadow.pixels[0], 0);
+	EXPECT_EQ(prepared->shadow.pixels[1], 255);
+	EXPECT_EQ(prepared->shadow.pixels[2], 255);
+	EXPECT_EQ(prepared->shadow.pixels[3], 255);
+
+	prepared = lightingInputs.Prepare(
+	    { 2, 2 },
+	    { classicLightGrid.data(), 2, 2, 2, 34, false, true, { 7, 11 }, { 3, -5 }, 2 },
+	    {},
+	    { layerMap.data(), 2, 2, 2, nullptr, 0, false, 1 });
+
+	ASSERT_NE(prepared, nullptr);
+	EXPECT_EQ(prepared->shadow.version, 1);
+	EXPECT_FALSE(prepared->shadow.dirtyRects.fullFrame);
+	EXPECT_TRUE(prepared->shadow.dirtyRects.rects.empty());
+
+	layerMap[0] = static_cast<uint8_t>(RenderLayer::Interface);
+	layerMap[2] = static_cast<uint8_t>(RenderLayer::World);
+	const Rectangle layerMapDirtyRect { { 0, 0 }, { 1, 2 } };
+	prepared = lightingInputs.Prepare(
+	    { 2, 2 },
+	    { classicLightGrid.data(), 2, 2, 2, 35, false, true, { 7, 11 }, { 3, -5 }, 2 },
+	    {},
+	    { layerMap.data(), 2, 2, 2, &layerMapDirtyRect, 1, false, 2 });
+
+	ASSERT_NE(prepared, nullptr);
+	EXPECT_EQ(prepared->shadow.version, 2);
+	ASSERT_EQ(prepared->shadow.dirtyRects.rects.size(), 1);
+	EXPECT_EQ(prepared->shadow.dirtyRects.rects[0].position, Point(0, 0));
+	EXPECT_EQ(prepared->shadow.dirtyRects.rects[0].size, Size(1, 2));
+	EXPECT_EQ(prepared->shadow.pixels[0], 255);
+	EXPECT_EQ(prepared->shadow.pixels[1], 255);
+	EXPECT_EQ(prepared->shadow.pixels[2], 0);
+	EXPECT_EQ(prepared->shadow.pixels[3], 255);
+}
+
+TEST(FrameCompositor, ClassicCompositionLightingInputsForwardSmoothSourcesToShaderWithClassicFallback)
+{
+	std::array<uint8_t, 65> classicLightMap {};
+	classicLightMap.fill(LightsMax);
+	std::array<uint8_t, 65> layerMap {};
+	layerMap.fill(static_cast<uint8_t>(RenderLayer::World));
+	std::array<RenderSmoothLightSource, 1> sources { { { { 0, 0 }, 8, FullyLitRenderClassicLightLevel, LightsMax } } };
+	ClassicCompositionLightingInputs lightingInputs;
+
+	const CompositionLightingInputs *prepared = lightingInputs.Prepare({ 65, 1 }, { classicLightMap.data(), 65, 1, 65, 12 }, { sources.data(), sources.size(), 3 }, { layerMap.data(), 65, 1, 65 });
+
+	ASSERT_NE(prepared, nullptr);
+	EXPECT_EQ(prepared->smoothLightSources.sources, sources.data());
+	EXPECT_EQ(prepared->smoothLightSources.count, sources.size());
+	EXPECT_TRUE(prepared->smoothPresentation);
+	const uint8_t *light = prepared->light.pixels;
+	EXPECT_EQ(light[0], LightsMax);
+	EXPECT_EQ(light[16], LightsMax);
+	EXPECT_EQ(light[32], LightsMax);
+	EXPECT_EQ(light[48], LightsMax);
+	EXPECT_EQ(light[64], LightsMax);
+}
+
+TEST(FrameCompositor, ClassicCompositionLightingInputsUseCapturedSentinelLevelsForNonWorldLayers)
+{
+	std::array<uint8_t, 2> classicLightMap { LightsMax, NonWorldRenderClassicLightLevel };
+	std::array<uint8_t, 2> layerMap {
+		static_cast<uint8_t>(RenderLayer::World),
+		static_cast<uint8_t>(RenderLayer::Interface),
+	};
+	std::array<RenderSmoothLightSource, 1> sources { { { { 0, 0 }, 8, FullyLitRenderClassicLightLevel, LightsMax } } };
+	ClassicCompositionLightingInputs lightingInputs;
+
+	const CompositionLightingInputs *prepared = lightingInputs.Prepare({ 2, 1 }, { classicLightMap.data(), 2, 1, 2, 12 }, { sources.data(), sources.size(), 3 }, { layerMap.data(), 2, 1, 2 });
+
+	ASSERT_NE(prepared, nullptr);
+	EXPECT_TRUE(prepared->smoothPresentation);
+	const uint8_t *light = prepared->light.pixels;
+	EXPECT_EQ(light[0], LightsMax);
+	EXPECT_EQ(light[1], NonWorldRenderClassicLightLevel);
+}
+
 TEST(FrameCompositor, PlansUnchangedAttachmentUploadAsSkip)
 {
 	std::array<uint8_t, 16> pixels {};
@@ -438,6 +671,143 @@ TEST(FrameCompositor, CpuPaletteCompositorExpandsPaletteIndices)
 	EXPECT_EQ(ReadColor(*outputSurface, 1, 1).r, 255);
 	EXPECT_EQ(ReadColor(*outputSurface, 1, 1).g, 255);
 	EXPECT_EQ(ReadColor(*outputSurface, 1, 1).b, 255);
+}
+
+TEST(FrameCompositor, CpuPaletteCompositorAppliesClassicLightMapToWorldPixels)
+{
+	const LightTableEntryGuard fullyLitEntry(0, 10, 10);
+	const LightTableEntryGuard dimEntry(5, 10, 20);
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 10;
+	pixels[1] = 10;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[10] = { 255, 0, 0, 255 };
+	palette[20] = { 0, 255, 0, 255 };
+
+	std::array<uint8_t, 2> layerMap {
+		static_cast<uint8_t>(RenderLayer::World),
+		static_cast<uint8_t>(RenderLayer::Interface),
+	};
+	std::array<uint8_t, 2> classicLightMap { 5, 5 };
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	CpuPaletteCompositor compositor;
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.Compose({
+	    { 2, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 9),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    { layerMap.data(), 2, 1, 2 },
+	    {},
+	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
+	    { classicLightMap.data(), 2, 1, 2, 4 },
+	    {},
+	});
+
+	const SDL_Color worldColor = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(worldColor.r, 0);
+	EXPECT_EQ(worldColor.g, 255);
+	const SDL_Color interfaceColor = ReadColor(*outputSurface, 1, 0);
+	EXPECT_EQ(interfaceColor.r, 255);
+	EXPECT_EQ(interfaceColor.g, 0);
+}
+
+TEST(FrameCompositor, CpuPaletteCompositorAppliesGeneratedClassicLightIntensityMap)
+{
+	const LightTableEntryGuard fullyLitEntry(0, 10, 10);
+	const LightTableEntryGuard dimEntry(5, 10, 20);
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 10;
+	pixels[1] = 10;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[10] = { 255, 0, 0, 255 };
+	palette[20] = { 0, 255, 0, 255 };
+
+	std::array<uint8_t, 2> classicLightMap { 170, 255 };
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	CpuPaletteCompositor compositor;
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.Compose({
+	    { 2, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 9),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    {},
+	    {},
+	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
+	    { classicLightMap.data(), 2, 1, 2, 4, true },
+	    {},
+	});
+
+	const SDL_Color worldColor = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(worldColor.r, 0);
+	EXPECT_EQ(worldColor.g, 255);
+	const SDL_Color neutralColor = ReadColor(*outputSurface, 1, 0);
+	EXPECT_EQ(neutralColor.r, 255);
+	EXPECT_EQ(neutralColor.g, 0);
+}
+
+TEST(FrameCompositor, CpuPaletteCompositorAppliesClassicLightDungeonGrid)
+{
+	const LightTableEntryGuard fullyLitEntry(0, 10, 10);
+	const LightTableEntryGuard dimEntry(5, 10, 20);
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 2, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 10;
+	pixels[indexSurface->pitch] = 10;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[10] = { 255, 0, 0, 255 };
+	palette[20] = { 0, 255, 0, 255 };
+
+	std::array<uint8_t, 16> classicLightGrid {};
+	classicLightGrid.fill(5);
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 2, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	CpuPaletteCompositor compositor;
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.Compose({
+	    { 1, 2 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 9),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    {},
+	    {},
+	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
+	    { classicLightGrid.data(), 4, 4, 4, 4, false, true, { 0, 0 }, { 0, 0 }, 1 },
+	    {},
+	});
+
+	const SDL_Color worldColor = ReadColor(*outputSurface, 0, 0);
+	EXPECT_EQ(worldColor.r, 0);
+	EXPECT_EQ(worldColor.g, 255);
+	const SDL_Color panelColor = ReadColor(*outputSurface, 0, 1);
+	EXPECT_EQ(panelColor.r, 255);
+	EXPECT_EQ(panelColor.g, 0);
 }
 
 TEST(FrameCompositor, CpuPaletteCompositorRespectsDirtyRects)
@@ -672,6 +1042,8 @@ TEST(FrameCompositor, CpuPaletteCompositorAddsWorldMaskAttachments)
 	    RenderWorldMaskDiagnosticMode::Off,
 	    {},
 	    RenderWorldProxyDiagnosticMode::Off,
+	    {},
+	    {},
 	});
 
 	ASSERT_EQ(backendPtr->composeCallCount, 1);
@@ -740,6 +1112,8 @@ TEST(FrameCompositor, CpuPaletteCompositorAddsWorldProxyAttachments)
 	    RenderWorldMaskDiagnosticMode::Off,
 	    { typeMap.data(), depthMap.data(), heightMap.data(), receiverMap.data(), occluderMap.data(), 2, 1, 2, 88 },
 	    RenderWorldProxyDiagnosticMode::Off,
+	    {},
+	    {},
 	});
 
 	ASSERT_EQ(backendPtr->composeCallCount, 1);
@@ -983,6 +1357,8 @@ TEST(FrameCompositor, AcceleratedPaletteBackendUsesIndexedPathWithLayerMapWhenDi
 	    RenderWorldMaskDiagnosticMode::Off,
 	    {},
 	    RenderWorldProxyDiagnosticMode::Off,
+	    {},
+	    {},
 	});
 
 	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
@@ -1065,6 +1441,8 @@ TEST(FrameCompositor, AcceleratedPaletteBackendUsesCpuPixelsForWorldMaskDiagnost
 	    RenderWorldMaskDiagnosticMode::Material,
 	    {},
 	    RenderWorldProxyDiagnosticMode::Off,
+	    {},
+	    {},
 	});
 
 	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
@@ -1120,6 +1498,8 @@ TEST(FrameCompositor, AcceleratedPaletteBackendUsesCpuPixelsForWorldProxyDiagnos
 	    RenderWorldMaskDiagnosticMode::Off,
 	    { typeMap.data(), depthMap.data(), heightMap.data(), receiverMap.data(), occluderMap.data(), 1, 1, 1, 7 },
 	    RenderWorldProxyDiagnosticMode::Depth,
+	    {},
+	    {},
 	});
 
 	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
@@ -1256,6 +1636,8 @@ TEST(FrameCompositor, AcceleratedPaletteBackendLightingDiagnosticUsesLayerMapIso
 	    RenderWorldMaskDiagnosticMode::Off,
 	    {},
 	    RenderWorldProxyDiagnosticMode::Off,
+	    {},
+	    {},
 	});
 
 	ASSERT_NE(presenterPtr->observedIndexedLighting, nullptr);
@@ -1269,6 +1651,199 @@ TEST(FrameCompositor, AcceleratedPaletteBackendLightingDiagnosticUsesLayerMapIso
 		EXPECT_EQ(pixel[3], 255);
 		EXPECT_EQ(shadow[x], 0);
 	}
+}
+
+TEST(FrameCompositor, AcceleratedPaletteBackendUsesClassicLightingOption)
+{
+	RenderLightShadowDiagnosticModeGuard diagnosticMode(RenderLightShadowDiagnosticMode::Off);
+	RenderAcceleratedClassicLightingGuard classicLighting(true);
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 3, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+	pixels[1] = 1;
+	pixels[2] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	std::array<uint8_t, 3> layerMap {
+		static_cast<uint8_t>(RenderLayer::World),
+		static_cast<uint8_t>(RenderLayer::Interface),
+		static_cast<uint8_t>(RenderLayer::Cursor),
+	};
+	std::array<uint8_t, 3> classicLightMap { 10, NonWorldRenderClassicLightLevel, NonWorldRenderClassicLightLevel };
+	std::array<RenderSmoothLightSource, 1> sources { { { { 0, 0 }, 8, FullyLitRenderClassicLightLevel, LightsMax } } };
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 3, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto presenter = std::make_unique<RecordingAcceleratedPalettePresenter>();
+	RecordingAcceleratedPalettePresenter *presenterPtr = presenter.get();
+	std::unique_ptr<IFrameCompositorBackend> backend = CreateAcceleratedPaletteCompositorBackend(std::move(presenter));
+	ASSERT_NE(backend, nullptr);
+
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.Compose({
+	    { 3, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 42),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    { layerMap.data(), 3, 1, 3 },
+	    {},
+	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
+	    { classicLightMap.data(), 3, 1, 3, 77 },
+	    { sources.data(), sources.size(), 4 },
+	});
+
+	ASSERT_NE(presenterPtr->observedIndexedLighting, nullptr);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->diagnosticMode, RenderLightShadowDiagnosticMode::Off);
+	EXPECT_TRUE(presenterPtr->observedIndexedLighting->smoothPresentation);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->smoothLightSources.sources, sources.data());
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->smoothLightSources.count, sources.size());
+	EXPECT_TRUE(presenterPtr->observedIndexedLighting->lightStoresClassicLightLevels);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->light.pixels, classicLightMap.data());
+	const uint8_t *light = presenterPtr->observedIndexedLighting->light.pixels;
+	EXPECT_EQ(light[0], 10);
+	EXPECT_EQ(light[1], NonWorldRenderClassicLightLevel);
+	EXPECT_EQ(light[2], NonWorldRenderClassicLightLevel);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->shadow.pixels[0], 0);
+	EXPECT_TRUE(presenterPtr->observedIndexedLighting->light.dirtyRects.fullFrame);
+}
+
+TEST(FrameCompositor, AcceleratedPaletteBackendDoesNotFullRecomposeIndexedFrameForDirectClassicLightChanges)
+{
+	RenderLightShadowDiagnosticModeGuard diagnosticMode(RenderLightShadowDiagnosticMode::Off);
+	RenderAcceleratedClassicLightingGuard classicLighting(true);
+	RenderFrameCompositorBackendGuard backendOption(RenderFrameCompositorBackend::SdlGpuPalette);
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+	pixels[1] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+	std::array<uint8_t, 2> layerMap {
+		static_cast<uint8_t>(RenderLayer::World),
+		static_cast<uint8_t>(RenderLayer::World),
+	};
+	std::array<uint8_t, 2> firstClassicLightMap { 10, 10 };
+	std::array<uint8_t, 2> secondClassicLightMap { 9, 9 };
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto presenter = std::make_unique<RecordingAcceleratedPalettePresenter>();
+	RecordingAcceleratedPalettePresenter *presenterPtr = presenter.get();
+	std::unique_ptr<IFrameCompositorBackend> backend = CreateAcceleratedPaletteCompositorBackend(std::move(presenter));
+	ASSERT_NE(backend, nullptr);
+
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.Compose({
+	    { 2, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 42),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    { layerMap.data(), 2, 1, 2 },
+	    {},
+	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
+	    { firstClassicLightMap.data(), 2, 1, 2, 77 },
+	    {},
+	});
+	ASSERT_EQ(presenterPtr->indexedFrameCallCount, 1);
+	ASSERT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
+
+	compositor.Compose({
+	    { 2, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 42),
+	    {},
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    { layerMap.data(), 2, 1, 2 },
+	    {},
+	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
+	    { secondClassicLightMap.data(), 2, 1, 2, 78 },
+	    {},
+	});
+
+	const RenderPerfCompositionStats &stats = compositor.GetLastCompositionStats();
+	EXPECT_EQ(presenterPtr->indexedFrameCallCount, 2);
+	EXPECT_EQ(compositor.GetLastBackendResult(), FrameCompositorBackendResult::PreparedDirectPresentation);
+	EXPECT_FALSE(stats.fullFrameComposed);
+	EXPECT_EQ(stats.fullFrameReason, CompositionFullFrameReason::None);
+	EXPECT_EQ(stats.composedRectCount, 0);
+	EXPECT_TRUE(presenterPtr->observedIndexedFrame.dirtyRects.rects.empty());
+	EXPECT_FALSE(presenterPtr->observedIndexedFrame.dirtyRects.fullFrame);
+	const CompositionAttachment *indexAttachment = FindCompositionAttachment(presenterPtr->observedIndexedFrame.attachments, CompositionAttachmentRole::IndexedAlbedo);
+	ASSERT_NE(indexAttachment, nullptr);
+	EXPECT_TRUE(indexAttachment->dirtyRects.rects.empty());
+	EXPECT_FALSE(indexAttachment->dirtyRects.fullFrame);
+}
+
+TEST(FrameCompositor, AcceleratedPaletteBackendClassicLightingSupportsLightRgbDiagnostic)
+{
+	RenderLightShadowDiagnosticModeGuard diagnosticMode(RenderLightShadowDiagnosticMode::LightRgb);
+	RenderAcceleratedClassicLightingGuard classicLighting(true);
+	SDLSurfaceUniquePtr indexSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	auto *pixels = static_cast<uint8_t *>(indexSurface->pixels);
+	pixels[0] = 1;
+	pixels[1] = 1;
+
+	std::array<SDL_Color, 256> palette {};
+	palette[1] = { 10, 20, 30, 255 };
+
+	std::array<uint8_t, 2> layerMap {
+		static_cast<uint8_t>(RenderLayer::World),
+		static_cast<uint8_t>(RenderLayer::Interface),
+	};
+	std::array<uint8_t, 2> classicLightMap { 10, NonWorldRenderClassicLightLevel };
+	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 32, SDL_PIXELFORMAT_RGBA8888);
+
+	auto presenter = std::make_unique<RecordingAcceleratedPalettePresenter>();
+	RecordingAcceleratedPalettePresenter *presenterPtr = presenter.get();
+	std::unique_ptr<IFrameCompositorBackend> backend = CreateAcceleratedPaletteCompositorBackend(std::move(presenter));
+	ASSERT_NE(backend, nullptr);
+
+	CpuPaletteCompositor compositor(std::move(backend));
+	compositor.SetOutputSurface(outputSurface.get());
+	compositor.Compose({
+	    { 2, 1 },
+	    MakeIndexBufferView(*indexSurface),
+	    MakePaletteSnapshot(palette, 42),
+	    FullFrameDirtyRectsForTest(),
+	    false,
+	    RenderLayerDiagnosticMode::Off,
+	    { layerMap.data(), 2, 1, 2 },
+	    {},
+	    {},
+	    {},
+	    RenderWorldMaskDiagnosticMode::Off,
+	    {},
+	    RenderWorldProxyDiagnosticMode::Off,
+	    { classicLightMap.data(), 2, 1, 2, 77 },
+	    {},
+	});
+
+	ASSERT_NE(presenterPtr->observedIndexedLighting, nullptr);
+	EXPECT_EQ(presenterPtr->observedIndexedLighting->diagnosticMode, RenderLightShadowDiagnosticMode::LightRgb);
+	EXPECT_TRUE(presenterPtr->observedIndexedLighting->lightStoresClassicLightLevels);
+	const uint8_t *light = presenterPtr->observedIndexedLighting->light.pixels;
+	EXPECT_EQ(light[0], 10);
+	EXPECT_EQ(light[1], NonWorldRenderClassicLightLevel);
 }
 
 TEST(FrameCompositor, AcceleratedPaletteBackendUploadsCpuPixelsWhenIndexedUploadFails)
@@ -1654,6 +2229,8 @@ TEST(FrameCompositor, RenderLayerDiagnosticOffKeepsPaletteExactOutput)
 	    RenderWorldMaskDiagnosticMode::Off,
 	    {},
 	    RenderWorldProxyDiagnosticMode::Off,
+	    {},
+	    {},
 	});
 
 	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
@@ -1693,6 +2270,8 @@ TEST(FrameCompositor, RenderWorldMaskDiagnosticOffKeepsPaletteExactOutput)
 	    RenderWorldMaskDiagnosticMode::Off,
 	    {},
 	    RenderWorldProxyDiagnosticMode::Off,
+	    {},
+	    {},
 	});
 
 	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
@@ -1740,6 +2319,8 @@ TEST(FrameCompositor, RenderWorldMaskDiagnosticMaterialIsWorldOnly)
 	    RenderWorldMaskDiagnosticMode::Material,
 	    {},
 	    RenderWorldProxyDiagnosticMode::Off,
+	    {},
+	    {},
 	});
 
 	const SDL_Color world = ReadColor(*outputSurface, 0, 0);
@@ -1788,6 +2369,8 @@ TEST(FrameCompositor, RenderWorldMaskDiagnosticReceiverUsesMaskValues)
 	    RenderWorldMaskDiagnosticMode::Receiver,
 	    {},
 	    RenderWorldProxyDiagnosticMode::Off,
+	    {},
+	    {},
 	});
 
 	const SDL_Color receiver = ReadColor(*outputSurface, 0, 0);
@@ -1841,6 +2424,8 @@ TEST(FrameCompositor, RenderWorldProxyDiagnosticDepthIsWorldOnly)
 	    RenderWorldMaskDiagnosticMode::Off,
 	    { typeMap.data(), depthMap.data(), heightMap.data(), receiverMap.data(), occluderMap.data(), 2, 1, 2, 9 },
 	    RenderWorldProxyDiagnosticMode::Depth,
+	    {},
+	    {},
 	});
 
 	const SDL_Color world = ReadColor(*outputSurface, 0, 0);
@@ -1890,6 +2475,8 @@ TEST(FrameCompositor, RenderWorldProxyDiagnosticsUseHeightAndOccluderValues)
 	    RenderWorldMaskDiagnosticMode::Off,
 	    { typeMap.data(), depthMap.data(), heightMap.data(), receiverMap.data(), occluderMap.data(), 2, 1, 2, 9 },
 	    RenderWorldProxyDiagnosticMode::Height,
+	    {},
+	    {},
 	});
 
 	const SDL_Color lowHeight = ReadColor(*outputSurface, 0, 0);
@@ -1916,6 +2503,8 @@ TEST(FrameCompositor, RenderWorldProxyDiagnosticsUseHeightAndOccluderValues)
 	    RenderWorldMaskDiagnosticMode::Off,
 	    { typeMap.data(), depthMap.data(), heightMap.data(), receiverMap.data(), occluderMap.data(), 2, 1, 2, 9 },
 	    RenderWorldProxyDiagnosticMode::Occluder,
+	    {},
+	    {},
 	});
 
 	const SDL_Color occluder = ReadColor(*outputSurface, 0, 0);
@@ -1967,6 +2556,8 @@ TEST(FrameCompositor, RenderWorldProxyDiagnosticsExposeTypeCoverageAndOutline)
 	    RenderWorldMaskDiagnosticMode::Off,
 	    { typeMap.data(), depthMap.data(), heightMap.data(), receiverMap.data(), occluderMap.data(), 3, 1, 3, 9 },
 	    RenderWorldProxyDiagnosticMode::Type,
+	    {},
+	    {},
 	});
 
 	const SDL_Color floorType = ReadColor(*outputSurface, 0, 0);
@@ -1998,6 +2589,8 @@ TEST(FrameCompositor, RenderWorldProxyDiagnosticsExposeTypeCoverageAndOutline)
 	    RenderWorldMaskDiagnosticMode::Off,
 	    { typeMap.data(), depthMap.data(), heightMap.data(), receiverMap.data(), occluderMap.data(), 3, 1, 3, 9 },
 	    RenderWorldProxyDiagnosticMode::Coverage,
+	    {},
+	    {},
 	});
 
 	const SDL_Color covered = ReadColor(*outputSurface, 0, 0);
@@ -2024,6 +2617,8 @@ TEST(FrameCompositor, RenderWorldProxyDiagnosticsExposeTypeCoverageAndOutline)
 	    RenderWorldMaskDiagnosticMode::Off,
 	    { typeMap.data(), depthMap.data(), heightMap.data(), receiverMap.data(), occluderMap.data(), 3, 1, 3, 9 },
 	    RenderWorldProxyDiagnosticMode::Outline,
+	    {},
+	    {},
 	});
 
 	const SDL_Color edge = ReadColor(*outputSurface, 0, 0);
@@ -2065,6 +2660,8 @@ TEST(FrameCompositor, RenderLayerDiagnosticTintBlendsLayerColor)
 	    RenderWorldMaskDiagnosticMode::Off,
 	    {},
 	    RenderWorldProxyDiagnosticMode::Off,
+	    {},
+	    {},
 	});
 
 	const SDL_Color color = ReadColor(*outputSurface, 0, 0);
@@ -2105,6 +2702,8 @@ TEST(FrameCompositor, RenderLayerDiagnosticOutlineMarksLayerBoundaries)
 	    RenderWorldMaskDiagnosticMode::Off,
 	    {},
 	    RenderWorldProxyDiagnosticMode::Off,
+	    {},
+	    {},
 	});
 
 	const SDL_Color worldBoundary = ReadColor(*outputSurface, 0, 0);
@@ -2152,6 +2751,8 @@ TEST(FrameCompositor, RenderLayerDiagnosticTintAndOutlineCombinesEffects)
 	    RenderWorldMaskDiagnosticMode::Off,
 	    {},
 	    RenderWorldProxyDiagnosticMode::Off,
+	    {},
+	    {},
 	});
 
 	const SDL_Color worldBoundary = ReadColor(*outputSurface, 0, 0);
@@ -2194,6 +2795,8 @@ TEST(FrameCompositor, RenderLayerDiagnosticRecomposesFullFrameWithoutDirtyRects)
 		RenderWorldMaskDiagnosticMode::Off,
 		{},
 		RenderWorldProxyDiagnosticMode::Off,
+		{},
+		{},
 	};
 	SDLSurfaceUniquePtr outputSurface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA8888);
 
@@ -2253,6 +2856,8 @@ TEST(FrameCompositor, CpuPaletteCompositorComposesLargeDiagnosticFrameAcrossRowB
 	    RenderWorldMaskDiagnosticMode::Off,
 	    {},
 	    RenderWorldProxyDiagnosticMode::Off,
+	    {},
+	    {},
 	});
 
 	ExpectWorldTint(*outputSurface, 0, 0, palette[1]);

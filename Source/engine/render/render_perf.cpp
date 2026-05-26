@@ -117,6 +117,11 @@ void AccumulateFrame()
 	RollingStats.worldProxyPrimitiveCount += CurrentFrame.worldProxyPrimitiveCount;
 	RollingStats.worldProxyActorPrimitiveCount += CurrentFrame.worldProxyActorPrimitiveCount;
 	RollingStats.worldProxyPixelCount += CurrentFrame.worldProxyPixelCount;
+	RollingStats.automapOverlayRectCount += CurrentFrame.automapOverlayRectCount;
+	RollingStats.automapOverlayVertexCount += CurrentFrame.automapOverlayVertexCount;
+	RollingStats.automapOverlayUploadBytes += CurrentFrame.automapOverlayUploadBytes;
+	RollingStats.automapOverlayUploadCount += CurrentFrame.automapOverlayUploadCount;
+	RollingStats.automapOverlaySkippedUploadCount += CurrentFrame.automapOverlaySkippedUploadCount;
 }
 
 void LogRollingStats()
@@ -125,7 +130,7 @@ void LogRollingStats()
 	if (frames == 0)
 		return;
 
-	Log("RenderPerf frames={} avg_us cursor_undraw={} world={} interface={} cursor={} debug={} dirty_blit={} compose={} present={} world_detail setup={} lightmap={} floor={} tiles={} oob={} zoom={} overlay={} debug={} view_ui={} layer_setup={} proxy={} tile_detail cell={} missile={} corpse={} object={} item={} player={} monster={} special={} dirty_rects submitted={} normalized={} composed={} dirty_area submitted={} normalized={} composed={} full_frames={} last_full_reason={} parallel_frames={} max_threads={} upload bytes={} rects={} skipped={} full={} failed={} last_upload_fallback={} backend_results no_frame={} cpu_surface={} direct_prepared={} direct_retained={} role_rects world={} world_overlay={} interface={} cursor={} diagnostic={} role_area world={} world_overlay={} interface={} cursor={} diagnostic={} layer_spans={} layer_pixels={} world_mask_spans={} world_mask_pixels={} world_proxy_primitives={} world_proxy_actor_primitives={} world_proxy_pixels={}",
+	Log("RenderPerf frames={} avg_us cursor_undraw={} world={} interface={} cursor={} debug={} dirty_blit={} compose={} present={} world_detail setup={} lightmap={} floor={} tiles={} oob={} zoom={} overlay={} debug={} view_ui={} layer_setup={} proxy={} tile_detail cell={} missile={} corpse={} object={} item={} player={} monster={} special={} dirty_rects submitted={} normalized={} composed={} dirty_area submitted={} normalized={} composed={} full_frames={} last_full_reason={} parallel_frames={} max_threads={} upload bytes={} rects={} skipped={} full={} failed={} last_upload_fallback={} backend_results no_frame={} cpu_surface={} direct_prepared={} direct_retained={} role_rects world={} world_overlay={} interface={} cursor={} diagnostic={} role_area world={} world_overlay={} interface={} cursor={} diagnostic={} layer_spans={} layer_pixels={} world_mask_spans={} world_mask_pixels={} world_proxy_primitives={} world_proxy_actor_primitives={} world_proxy_pixels={} automap_overlay rects={} vertices={} upload_bytes={} uploads={} skipped={}",
 	    frames,
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::CursorUndraw)], frames),
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::WorldDraw)], frames),
@@ -190,7 +195,12 @@ void LogRollingStats()
 	    Average(RollingStats.worldMaskStampedPixelCount, frames),
 	    Average(RollingStats.worldProxyPrimitiveCount, frames),
 	    Average(RollingStats.worldProxyActorPrimitiveCount, frames),
-	    Average(RollingStats.worldProxyPixelCount, frames));
+	    Average(RollingStats.worldProxyPixelCount, frames),
+	    Average(RollingStats.automapOverlayRectCount, frames),
+	    Average(RollingStats.automapOverlayVertexCount, frames),
+	    Average(RollingStats.automapOverlayUploadBytes, frames),
+	    RollingStats.automapOverlayUploadCount,
+	    RollingStats.automapOverlaySkippedUploadCount);
 }
 
 } // namespace
@@ -234,6 +244,8 @@ std::string_view CompositionFullFrameReasonName(const CompositionFullFrameReason
 		return "world-proxy-diagnostic-mode-changed";
 	case CompositionFullFrameReason::WorldProxyDiagnosticsRequested:
 		return "world-proxy-diagnostics-requested";
+	case CompositionFullFrameReason::ClassicLightMapChanged:
+		return "classic-light-map-changed";
 	}
 	return "unknown";
 }
@@ -348,6 +360,20 @@ void SetRenderPerfWorldProxyStats(const uint64_t primitiveCount, const uint64_t 
 	CurrentFrame.worldProxyPrimitiveCount = primitiveCount;
 	CurrentFrame.worldProxyActorPrimitiveCount = actorPrimitiveCount;
 	CurrentFrame.worldProxyPixelCount = pixelCount;
+}
+
+void AddRenderPerfAutomapOverlayStats(const uint64_t rectCount, const uint64_t vertexCount, const uint64_t uploadBytes, const bool uploaded, const bool skippedUpload)
+{
+	if (!Active)
+		return;
+
+	CurrentFrame.automapOverlayRectCount += rectCount;
+	CurrentFrame.automapOverlayVertexCount += vertexCount;
+	CurrentFrame.automapOverlayUploadBytes += uploadBytes;
+	if (uploaded)
+		CurrentFrame.automapOverlayUploadCount++;
+	if (skippedUpload)
+		CurrentFrame.automapOverlaySkippedUploadCount++;
 }
 
 RenderPerfScope::RenderPerfScope(const RenderPerfPhase phase)

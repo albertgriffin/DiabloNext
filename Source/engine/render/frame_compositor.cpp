@@ -44,6 +44,8 @@
 #include "engine/palette.h"
 #include "engine/render/accelerated_compositor_lifecycle.hpp"
 #include "engine/render/render_layer.hpp"
+#include "levels/dun_tile.hpp"
+#include "lighting.h"
 #include "options.h"
 #include "utils/display.h"
 #include "utils/sdl_compat.h"
@@ -319,12 +321,85 @@ void UpsertCompositionAttachment(std::vector<CompositionAttachment> &attachments
 	    && frame.worldProxyMap.pitch >= frame.worldProxyMap.width;
 }
 
+[[nodiscard]] bool ClassicLightMapIsValid(const RenderClassicLightMapView &map, const Size logicalSize)
+{
+	if (map.storesDungeonGrid) {
+		return map.lightLevelPixels != nullptr
+		    && map.width > 0
+		    && map.height > 0
+		    && map.pitch >= map.width
+		    && map.viewportHeight > 0
+		    && logicalSize.width > 0
+		    && logicalSize.height > 0;
+	}
+	return map.lightLevelPixels != nullptr
+	    && map.width >= logicalSize.width
+	    && map.height >= logicalSize.height
+	    && map.pitch >= map.width
+	    && logicalSize.width > 0
+	    && logicalSize.height > 0;
+}
+
 [[nodiscard]] bool IsWorldLayerPixel(const RenderLayerMapView &layerMap, const int x, const int y)
 {
 	if (layerMap.pixels == nullptr || x < 0 || y < 0 || x >= layerMap.width || y >= layerMap.height)
 		return true;
 	const uint8_t layerId = layerMap.pixels[static_cast<size_t>(y) * layerMap.pitch + x];
 	return layerId == static_cast<uint8_t>(RenderLayer::World);
+}
+
+[[nodiscard]] bool ClassicLightAffectsLayerPixel(const RenderLayerMapView &layerMap, const int x, const int y)
+{
+	if (layerMap.pixels == nullptr || x < 0 || y < 0 || x >= layerMap.width || y >= layerMap.height)
+		return true;
+	const uint8_t layerId = layerMap.pixels[static_cast<size_t>(y) * layerMap.pitch + x];
+	return layerId == static_cast<uint8_t>(RenderLayer::World);
+}
+
+[[nodiscard]] uint8_t ClassicLightTableIndexForCompositorSample(const uint8_t sample, const bool storesIntensity)
+{
+	if (!storesIntensity)
+		return std::min<uint8_t>(sample, LightsMax);
+
+	const int darkness = 255 - sample;
+	return static_cast<uint8_t>(std::clamp((darkness * LightsMax + 127) / 255, 0, static_cast<int>(LightsMax)));
+}
+
+[[nodiscard]] int FloorDiv256(const int value)
+{
+	int quotient = value / 256;
+	if (value < 0 && value % 256 != 0)
+		quotient--;
+	return quotient;
+}
+
+[[nodiscard]] uint8_t ClassicLightGridLevelAt(const RenderClassicLightMapView &map, const int x, const int y)
+{
+	if (x < 0 || y < 0 || x >= map.width || y >= map.height)
+		return LightsMax;
+	return std::min<uint8_t>(map.lightLevelPixels[static_cast<size_t>(y) * map.pitch + x], LightsMax);
+}
+
+[[nodiscard]] uint8_t ClassicLightTableIndexForCompositorGridSample(const RenderClassicLightMapView &map, const int x, const int y)
+{
+	if (y < 0 || y >= map.viewportHeight)
+		return FullyLitRenderClassicLightLevel;
+
+	const int originX = map.offset.deltaX + TILE_WIDTH / 2;
+	const int originY = map.offset.deltaY - TILE_HEIGHT / 2;
+	const int tileXFixed = map.firstTile.x * 256 + 6 - 4 * originX - 8 * originY + 4 * x + 8 * y;
+	const int tileYFixed = map.firstTile.y * 256 + 2 + 4 * originX - 8 * originY - 4 * x + 8 * y;
+	const int tileX = FloorDiv256(tileXFixed);
+	const int tileY = FloorDiv256(tileYFixed);
+	const int fractionX = tileXFixed - tileX * 256;
+	const int fractionY = tileYFixed - tileY * 256;
+	const int inverseX = 256 - fractionX;
+	const int inverseY = 256 - fractionY;
+	const int weightedLevel = ClassicLightGridLevelAt(map, tileX, tileY) * inverseX * inverseY
+	    + ClassicLightGridLevelAt(map, tileX + 1, tileY) * fractionX * inverseY
+	    + ClassicLightGridLevelAt(map, tileX, tileY + 1) * inverseX * fractionY
+	    + ClassicLightGridLevelAt(map, tileX + 1, tileY + 1) * fractionX * fractionY;
+	return static_cast<uint8_t>(std::clamp((weightedLevel + 32768) / 65536, 0, static_cast<int>(LightsMax)));
 }
 
 [[nodiscard]] RgbColor RenderLayerDiagnosticColor(const uint8_t layerId)
@@ -1000,6 +1075,7 @@ private:
 		const bool renderLayerOutlineEnabled = renderLayerDiagnosticsEnabled && UsesRenderLayerOutline(frame.renderLayerDiagnosticMode);
 		const bool worldMaskDiagnosticsEnabled = WorldMaskDiagnosticEnabled(frame);
 		const bool worldProxyDiagnosticsEnabled = WorldProxyDiagnosticEnabled(frame);
+		const bool classicLightMapEnabled = ClassicLightMapIsValid(frame.classicLightMap, frame.logicalSize);
 		const std::array<uint32_t, 256> &mappedPalette = GetMappedPalette(outputSurface, frame.palette, frame.diagnosticTransform);
 		std::array<std::array<uint32_t, 256>, RenderLayerDiagnosticColorCount> mappedTintPalettes {};
 		std::array<uint32_t, RenderLayerDiagnosticColorCount> mappedOutlineColors {};
@@ -1032,7 +1108,7 @@ private:
 		}
 
 		const int bytesPerPixel = BytesPerPixel(outputSurface);
-		const bool useFast32NoDiagnostics = bytesPerPixel == 4 && !frame.diagnosticTransform && !renderLayerDiagnosticsEnabled && !worldMaskDiagnosticsEnabled && !worldProxyDiagnosticsEnabled;
+		const bool useFast32NoDiagnostics = bytesPerPixel == 4 && !frame.diagnosticTransform && !renderLayerDiagnosticsEnabled && !worldMaskDiagnosticsEnabled && !worldProxyDiagnosticsEnabled && !classicLightMapEnabled;
 		const auto composeRows32NoDiagnostics = [&](const int yBegin, const int yEnd) {
 			for (int y = yBegin; y < yEnd; y++) {
 				const uint8_t *src = frame.indexBuffer.pixels + y * frame.indexBuffer.pitch + rect.position.x;
@@ -1052,16 +1128,26 @@ private:
 				const uint8_t *layerRow = layerRowInBounds ? frame.renderLayerMap.pixels + static_cast<size_t>(y) * frame.renderLayerMap.pitch : nullptr;
 				const uint8_t *layerRowAbove = frame.renderLayerMap.pixels != nullptr && y > 0 && y - 1 < frame.renderLayerMap.height ? frame.renderLayerMap.pixels + static_cast<size_t>(y - 1) * frame.renderLayerMap.pitch : nullptr;
 				const uint8_t *layerRowBelow = frame.renderLayerMap.pixels != nullptr && y + 1 < frame.renderLayerMap.height ? frame.renderLayerMap.pixels + static_cast<size_t>(y + 1) * frame.renderLayerMap.pitch : nullptr;
+				const bool classicLightRowInBounds = classicLightMapEnabled && y >= 0 && y < frame.classicLightMap.height;
+				const uint8_t *classicLightRow = classicLightRowInBounds ? frame.classicLightMap.lightLevelPixels + static_cast<size_t>(y) * frame.classicLightMap.pitch : nullptr;
 				for (int x = 0; x < rect.size.width; x++) {
 					const int outputX = rect.position.x + x;
-					uint32_t pixel = mappedPalette[src[x]];
+					uint8_t paletteIndex = src[x];
+					if (classicLightMapEnabled && ClassicLightAffectsLayerPixel(frame.renderLayerMap, outputX, y)) {
+						if (frame.classicLightMap.storesDungeonGrid) {
+							paletteIndex = LightTables[ClassicLightTableIndexForCompositorGridSample(frame.classicLightMap, outputX, y)][paletteIndex];
+						} else if (classicLightRow != nullptr && outputX >= 0 && outputX < frame.classicLightMap.width) {
+							paletteIndex = LightTables[ClassicLightTableIndexForCompositorSample(classicLightRow[outputX], frame.classicLightMap.storesIntensity)][paletteIndex];
+						}
+					}
+					uint32_t pixel = mappedPalette[paletteIndex];
 					if (renderLayerDiagnosticsEnabled) {
 						uint8_t layerId = UnknownRenderLayerId;
 						if (layerRow != nullptr && outputX >= 0 && outputX < frame.renderLayerMap.width)
 							layerId = layerRow[outputX];
 						const size_t colorIndex = RenderLayerDiagnosticColorIndex(layerId);
 						if (renderLayerTintEnabled)
-							pixel = mappedTintPalettes[colorIndex][src[x]];
+							pixel = mappedTintPalettes[colorIndex][paletteIndex];
 						if (renderLayerOutlineEnabled) {
 							bool isBoundary = layerId == UnknownRenderLayerId;
 							if (!isBoundary) {
@@ -1410,11 +1496,13 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 	renderWorldMaskDiagnosticMode_ = frame.renderWorldMaskDiagnosticMode;
 	worldProxyMap_ = frame.worldProxyMap;
 	renderWorldProxyDiagnosticMode_ = frame.renderWorldProxyDiagnosticMode;
+	classicLightMap_ = frame.classicLightMap;
+	smoothLightSources_ = frame.smoothLightSources;
 	compositionSurfaceMetadata_ = WithFullFrameCompositionSurfaceBounds(frame.compositionSurfaceMetadata, frame.logicalSize);
 
 	lastCompositionStats_ = {};
 	lastCompositionStats_.compositorEnabled = true;
-	lastCompositionStats_.layerCaptureEnabled = frame.renderLayerMap.pixels != nullptr || frame.worldMaskMap.materialPixels != nullptr || frame.worldProxyMap.depthPixels != nullptr;
+	lastCompositionStats_.layerCaptureEnabled = frame.renderLayerMap.pixels != nullptr || frame.worldMaskMap.materialPixels != nullptr || frame.worldProxyMap.depthPixels != nullptr || frame.classicLightMap.lightLevelPixels != nullptr;
 	RecordCompositionSurfaceStats(lastCompositionStats_, compositionSurfaceMetadata_);
 	lastBackendResult_ = FrameCompositorBackendResult::NoFrameProduced;
 	directPresentationPending_ = false;
@@ -1432,6 +1520,12 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 	const bool renderWorldMaskDiagnosticsRequested = renderWorldMaskDiagnosticMode_ != RenderWorldMaskDiagnosticMode::Off;
 	const bool renderWorldProxyDiagnosticModeChanged = hasComposedFrame_ && renderWorldProxyDiagnosticMode_ != lastRenderWorldProxyDiagnosticMode_;
 	const bool renderWorldProxyDiagnosticsRequested = renderWorldProxyDiagnosticMode_ != RenderWorldProxyDiagnosticMode::Off;
+	const bool backendConsumesClassicLightMap = backend_ != nullptr && backend_->CanConsumeClassicLightMapDirectly();
+	const bool classicLightMapVersionChanged = hasComposedFrame_
+	    && ClassicLightMapIsValid(classicLightMap_, logicalSize_)
+	    && classicLightMap_.version != lastComposedClassicLightMapVersion_;
+	const bool classicLightMapChanged = classicLightMapVersionChanged && !backendConsumesClassicLightMap;
+	const bool directClassicLightMapChanged = classicLightMapVersionChanged && backendConsumesClassicLightMap;
 	const bool lightShadowDiagnosticsRequested = *GetOptions().Experimental.renderLightShadowDiagnosticMode != RenderLightShadowDiagnosticMode::Off
 	    && *GetOptions().Experimental.renderFrameCompositorBackend == RenderFrameCompositorBackend::SdlGpuPalette;
 	const Size bounds {
@@ -1465,6 +1559,8 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 		fullFrameReason = CompositionFullFrameReason::WorldProxyDiagnosticModeChanged;
 	} else if (renderWorldProxyDiagnosticsRequested) {
 		fullFrameReason = CompositionFullFrameReason::WorldProxyDiagnosticsRequested;
+	} else if (classicLightMapChanged) {
+		fullFrameReason = CompositionFullFrameReason::ClassicLightMapChanged;
 	} else if (lightShadowDiagnosticsRequested) {
 		fullFrameReason = CompositionFullFrameReason::LightShadowDiagnosticRequested;
 	} else if (outputSurfaceChanged) {
@@ -1489,6 +1585,7 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 	const auto markComposedFrame = [&]() {
 		hasComposedFrame_ = true;
 		lastComposedPaletteVersion_ = palette_.version;
+		lastComposedClassicLightMapVersion_ = classicLightMap_.version;
 		lastComposedDiagnosticTransformEnabled_ = diagnosticTransformEnabled_;
 		lastRenderLayerDiagnosticMode_ = renderLayerDiagnosticMode_;
 		lastRenderWorldMaskDiagnosticMode_ = renderWorldMaskDiagnosticMode_;
@@ -1512,6 +1609,8 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 			renderWorldMaskDiagnosticMode_,
 			worldProxyMap_,
 			renderWorldProxyDiagnosticMode_,
+			classicLightMap_,
+			smoothLightSources_,
 		};
 		UpsertCompositionAttachment(backendFrame.attachments, MakeIndexedAlbedoAttachment(indexBuffer_, logicalSize_, frame.dirtyRects));
 		UpsertCompositionAttachment(backendFrame.attachments, MakePaletteAttachment(palette_));
@@ -1542,6 +1641,12 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 		return;
 	}
 
+	if (noDirtyRects && directClassicLightMapChanged) {
+		composeRects({});
+		SetRenderPerfCompositionStats(lastCompositionStats_);
+		return;
+	}
+
 	if (noDirtyRects && backend_ != nullptr && backend_->CanRetainDirectPresentation()) {
 		lastBackendResult_ = FrameCompositorBackendResult::RetainedDirectPresentation;
 		RecordBackendResult(lastCompositionStats_, lastBackendResult_);
@@ -1558,7 +1663,9 @@ void CpuPaletteCompositor::Compose(const CompositionFrame &frame)
 
 FrameCompositorBackendResult CpuPaletteCompositor::ComposeRects(const CompositionFrame &frame, const std::vector<Rectangle> &rects)
 {
-	if (rects.empty() || outputSurface_ == nullptr || backend_ == nullptr || !backend_->IsAvailable())
+	if (outputSurface_ == nullptr || backend_ == nullptr || !backend_->IsAvailable())
+		return FrameCompositorBackendResult::NoFrameProduced;
+	if (rects.empty() && !backend_->CanConsumeClassicLightMapDirectly())
 		return FrameCompositorBackendResult::NoFrameProduced;
 
 	return backend_->Compose(frame, *outputSurface_, rects, lastCompositionStats_);
@@ -1580,6 +1687,8 @@ void CpuPaletteCompositor::Compose()
 		renderWorldMaskDiagnosticMode_,
 		worldProxyMap_,
 		renderWorldProxyDiagnosticMode_,
+		classicLightMap_,
+		smoothLightSources_,
 	};
 	UpsertCompositionAttachment(frame.attachments, MakeIndexedAlbedoAttachment(indexBuffer_, logicalSize_, dirtyRects_));
 	UpsertCompositionAttachment(frame.attachments, MakePaletteAttachment(palette_));
@@ -1646,6 +1755,8 @@ bool ComposeFrameToOutput(SDL_Surface *outputSurface)
 		    *GetOptions().Experimental.renderWorldMaskDiagnosticMode,
 		    CurrentRenderWorldProxyMapView(),
 		    *GetOptions().Experimental.renderWorldProxyDiagnosticMode,
+		    CurrentRenderClassicLightMapView(),
+		    CurrentRenderSmoothLightSourceView(),
 		});
 	}
 	const FrameCompositorBackendResult backendResult = FrameCompositor.GetLastBackendResult();

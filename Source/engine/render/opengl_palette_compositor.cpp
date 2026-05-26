@@ -43,11 +43,6 @@
 namespace devilution {
 namespace {
 
-[[nodiscard]] bool OpenGlPaletteCompositorBuildAvailable()
-{
-	return DEVILUTIONX_OPENGL_PALETTE_COMPOSITOR_ACTIVE != 0;
-}
-
 [[nodiscard]] bool OpenGlPaletteCompositorAllowedByRuntime()
 {
 #ifdef USE_SDL1
@@ -629,6 +624,11 @@ bool LoggedUnavailableBuild = false;
 #endif
 
 } // namespace
+
+bool OpenGlPaletteCompositorBuildAvailable()
+{
+	return DEVILUTIONX_OPENGL_PALETTE_COMPOSITOR_ACTIVE != 0;
+}
 
 bool OpenGlPaletteCompositorRequested()
 {

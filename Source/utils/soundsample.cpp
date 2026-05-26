@@ -6,6 +6,7 @@
 #include <utility>
 
 #ifdef USE_SDL3
+#include <SDL3/SDL_audio.h>
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_iostream.h>
 #include <SDL3_mixer/SDL_mixer.h>
@@ -99,6 +100,27 @@ void PanLogToLeftRight(int logPan, float &leftGain, float &rightGain)
 		leftGain = factor;
 		rightGain = 1.0f;
 	}
+}
+
+MIX_Audio *LoadWavAudioFallbackFromMemory(MIX_Mixer *mixer, const uint8_t *data, size_t size)
+{
+	SDL_IOStream *io = SDL_IOFromConstMem(data, size);
+	if (io == nullptr) {
+		return nullptr;
+	}
+
+	SDL_AudioSpec spec = {};
+	Uint8 *decoded = nullptr;
+	Uint32 decodedSize = 0;
+	if (!SDL_LoadWAV_IO(io, /*closeio=*/true, &spec, &decoded, &decodedSize)) {
+		return nullptr;
+	}
+
+	MIX_Audio *audio = MIX_LoadRawAudioNoCopy(mixer, decoded, decodedSize, &spec, /*free_when_done=*/true);
+	if (audio == nullptr) {
+		SDL_free(decoded);
+	}
+	return audio;
 }
 
 #else  // !USE_SDL3
@@ -379,6 +401,15 @@ int SoundSample::SetChunk(ArraySharedPtr<std::uint8_t> fileData, std::size_t dwB
 	// For small sound effects, predecode to avoid repeated decoding overhead.
 	audio_ = MIX_LoadAudio_IO(CurrentMixer, io, /*predecode=*/true, /*closeio=*/true);
 	if (audio_ == nullptr) {
+		const std::string mixerError = SDL_GetError();
+		if (!isMp3_) {
+			audio_ = LoadWavAudioFallbackFromMemory(CurrentMixer, file_data_.get(), file_data_size_);
+			if (audio_ != nullptr) {
+				LogVerbose(LogCategory::Audio, "MIX_LoadAudio_IO failed for WAV data, loaded via SDL_LoadWAV_IO fallback: {}", mixerError);
+				return 0;
+			}
+		}
+		SDL_SetError("%s", mixerError.c_str());
 		LogError(LogCategory::Audio, "MIX_LoadAudio_IO failed (from SoundSample::SetChunk): {}", SDL_GetError());
 		return -1;
 	}

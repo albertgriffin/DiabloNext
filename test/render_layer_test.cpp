@@ -2,7 +2,12 @@
 
 #include <array>
 #include <cstdint>
+#include <utility>
+#include <vector>
 
+#include "automap.h"
+#include "engine/lighting_defs.hpp"
+#include "engine/render/automap_render.hpp"
 #include "engine/render/clx_render.hpp"
 #include "engine/render/primitive_render.hpp"
 #include "engine/render/render_layer.hpp"
@@ -73,6 +78,12 @@ uint8_t WorldProxyOccluderAt(const int x, const int y)
 	return worldProxyMap.occluderPixels[static_cast<size_t>(y) * worldProxyMap.pitch + x];
 }
 
+uint8_t ClassicLightAt(const int x, const int y)
+{
+	const RenderClassicLightMapView classicLightMap = CurrentRenderClassicLightMapView();
+	return classicLightMap.lightLevelPixels[static_cast<size_t>(y) * classicLightMap.pitch + x];
+}
+
 void BeginTestRenderLayerFrame(const Surface &out)
 {
 	ResetRenderLayerFrameStats();
@@ -135,6 +146,99 @@ TEST(RenderLayer, CapturesLayerOwnershipForChangedPixels)
 	EXPECT_EQ(LayerAt(0, 0), static_cast<uint8_t>(RenderLayer::WorldOverlay));
 	EXPECT_EQ(LayerAt(1, 0), static_cast<uint8_t>(RenderLayer::Interface));
 	EXPECT_EQ(LayerAt(2, 0), static_cast<uint8_t>(RenderLayer::WorldOverlay));
+}
+
+TEST(RenderLayer, WorldDefaultLayerCaptureOnlyStampsNonWorldPixels)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 3, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	ResetRenderLayerFrameStats();
+	BeginRenderLayerFrame(out, true, false, false, false, false, false, false, true);
+	out.SetPixel({ 0, 0 }, 1);
+	{
+		RenderLayerScope interfaceLayer(RenderLayer::Interface);
+		out.SetPixel({ 1, 0 }, 2);
+	}
+
+	EXPECT_EQ(LayerAt(0, 0), static_cast<uint8_t>(RenderLayer::World));
+	EXPECT_EQ(LayerAt(1, 0), static_cast<uint8_t>(RenderLayer::Interface));
+	EXPECT_EQ(LayerAt(2, 0), static_cast<uint8_t>(RenderLayer::World));
+	EXPECT_EQ(GetRenderLayerFrameStats().stampedPixelCount, 1);
+}
+
+TEST(RenderLayer, WorldDefaultLayerCaptureResetsPreviousNonWorldSpans)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 3, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	ResetRenderLayerFrameStats();
+	BeginRenderLayerFrame(out, true, false, false, false, false, false, false, true);
+	{
+		RenderLayerScope interfaceLayer(RenderLayer::Interface);
+		out.SetPixel({ 1, 0 }, 2);
+	}
+	EXPECT_TRUE(CurrentRenderLayerMapView().dirtyFullFrame);
+
+	BeginRenderLayerFrame(out, true, false, false, false, false, false, false, true);
+	const RenderLayerMapView layerMap = CurrentRenderLayerMapView();
+
+	EXPECT_EQ(LayerAt(1, 0), static_cast<uint8_t>(RenderLayer::World));
+	EXPECT_FALSE(layerMap.dirtyFullFrame);
+	ASSERT_EQ(layerMap.dirtyRectCount, 1U);
+	EXPECT_EQ(layerMap.dirtyRects[0].position, Point(1, 0));
+	EXPECT_EQ(layerMap.dirtyRects[0].size, Size(1, 1));
+	EXPECT_EQ(GetRenderLayerFrameStats().stampedPixelCount, 0);
+}
+
+TEST(RenderLayer, ExplicitLayerRectPersistsForDefaultWorldCapture)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 4, 2, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	ResetRenderLayerFrameStats();
+	BeginRenderLayerFrame(out, true, false, false, false, false, false, false, true);
+	MarkRenderLayerRect(RenderLayer::Interface, { { 1, 0 }, { 2, 2 } });
+
+	EXPECT_EQ(LayerAt(0, 0), static_cast<uint8_t>(RenderLayer::World));
+	EXPECT_EQ(LayerAt(1, 0), static_cast<uint8_t>(RenderLayer::Interface));
+	EXPECT_EQ(LayerAt(2, 1), static_cast<uint8_t>(RenderLayer::Interface));
+	EXPECT_EQ(LayerAt(3, 1), static_cast<uint8_t>(RenderLayer::World));
+	EXPECT_TRUE(CurrentRenderLayerMapView().dirtyFullFrame);
+
+	BeginRenderLayerFrame(out, true, false, false, false, false, false, false, true);
+	MarkRenderLayerRect(RenderLayer::Interface, { { 1, 0 }, { 2, 2 } });
+	const RenderLayerMapView layerMap = CurrentRenderLayerMapView();
+
+	EXPECT_EQ(LayerAt(1, 0), static_cast<uint8_t>(RenderLayer::Interface));
+	EXPECT_EQ(LayerAt(2, 1), static_cast<uint8_t>(RenderLayer::Interface));
+	EXPECT_FALSE(layerMap.dirtyFullFrame);
+	EXPECT_EQ(layerMap.dirtyRectCount, 0U);
+}
+
+TEST(RenderLayer, ExplicitLayerRectMoveResetsPreviousDefaultWorldCapture)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 4, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	ResetRenderLayerFrameStats();
+	BeginRenderLayerFrame(out, true, false, false, false, false, false, false, true);
+	MarkRenderLayerRect(RenderLayer::Cursor, { { 0, 0 }, { 1, 1 } });
+	EXPECT_EQ(LayerAt(0, 0), static_cast<uint8_t>(RenderLayer::Cursor));
+	EXPECT_TRUE(CurrentRenderLayerMapView().dirtyFullFrame);
+
+	BeginRenderLayerFrame(out, true, false, false, false, false, false, false, true);
+	MarkRenderLayerRect(RenderLayer::Cursor, { { 2, 0 }, { 1, 1 } });
+	const RenderLayerMapView layerMap = CurrentRenderLayerMapView();
+
+	EXPECT_EQ(LayerAt(0, 0), static_cast<uint8_t>(RenderLayer::World));
+	EXPECT_EQ(LayerAt(2, 0), static_cast<uint8_t>(RenderLayer::Cursor));
+	EXPECT_FALSE(layerMap.dirtyFullFrame);
+	ASSERT_EQ(layerMap.dirtyRectCount, 2U);
+	EXPECT_EQ(layerMap.dirtyRects[0].position, Point(2, 0));
+	EXPECT_EQ(layerMap.dirtyRects[0].size, Size(1, 1));
+	EXPECT_EQ(layerMap.dirtyRects[1].position, Point(0, 0));
+	EXPECT_EQ(layerMap.dirtyRects[1].size, Size(1, 1));
 }
 
 TEST(RenderLayer, ParentScopeCanOverwriteChildOwnedPixelsAfterChildExits)
@@ -246,6 +350,92 @@ TEST(RenderLayer, TracksLayerCaptureStampCost)
 	EXPECT_EQ(stats.stampedPixelCount, 4);
 }
 
+TEST(RenderLayer, AutomapHorizontalLinesStampLayerAsSpans)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 32, 8, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	SetAutomapType(AutomapType::Opaque);
+	ResetRenderLayerFrameStats();
+	BeginRenderLayerFrame(out, true, false, false, false, false, false, false, true);
+	{
+		RenderLayerScope overlayLayer(RenderLayer::WorldOverlay);
+		DrawMapLineWE(out, { 3, 4 }, 20, 1);
+	}
+
+	const RenderLayerFrameStats &stats = GetRenderLayerFrameStats();
+	EXPECT_EQ(stats.stampedSpanCount, 1);
+	EXPECT_EQ(stats.stampedPixelCount, 20);
+	EXPECT_EQ(LayerAt(3, 4), static_cast<uint8_t>(RenderLayer::WorldOverlay));
+	EXPECT_EQ(LayerAt(22, 4), static_cast<uint8_t>(RenderLayer::WorldOverlay));
+}
+
+TEST(RenderLayer, AutomapOverlayCaptureRecordsSpansWithoutCpuPixels)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 32, 8, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+	*out.at(3, 4) = 7;
+	*out.at(22, 4) = 7;
+
+	SetAutomapType(AutomapType::Opaque);
+	ResetRenderLayerFrameStats();
+	BeginRenderLayerFrame(out, true, false, false, false, false, false, false, true);
+	RenderAutomapOverlayView overlay;
+	{
+		RenderLayerScope overlayLayer(RenderLayer::WorldOverlay);
+		BeginRenderAutomapOverlayCapture();
+		DrawMapLineWE(out, { 3, 4 }, 20, 1);
+		overlay = EndRenderAutomapOverlayCapture();
+	}
+
+	ASSERT_TRUE(overlay.active);
+	ASSERT_EQ(overlay.rectCount, 1U);
+	EXPECT_EQ(overlay.rects[0].rect.position, Point(3, 4));
+	EXPECT_EQ(overlay.rects[0].rect.size, Size(20, 1));
+	EXPECT_EQ(overlay.rects[0].colorIndex, 1);
+	EXPECT_EQ(overlay.rects[0].alpha, 255);
+	EXPECT_EQ(*out.at(3, 4), 7);
+	EXPECT_EQ(*out.at(22, 4), 7);
+	EXPECT_EQ(GetRenderLayerFrameStats().stampedSpanCount, 0);
+	EXPECT_EQ(GetRenderLayerFrameStats().stampedPixelCount, 0);
+	EXPECT_EQ(LayerAt(3, 4), static_cast<uint8_t>(RenderLayer::World));
+	EXPECT_EQ(LayerAt(22, 4), static_cast<uint8_t>(RenderLayer::World));
+}
+
+TEST(RenderLayer, AutomapOverlayCaptureUsesTransparentAlpha)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 8, 8, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	SetAutomapType(AutomapType::Transparent);
+	BeginRenderAutomapOverlayCapture();
+	DrawMapLineNS(out, { 2, 1 }, 5, 4);
+	const RenderAutomapOverlayView overlay = EndRenderAutomapOverlayCapture();
+	SetAutomapType(AutomapType::Opaque);
+
+	ASSERT_TRUE(overlay.active);
+	ASSERT_EQ(overlay.rectCount, 1U);
+	EXPECT_EQ(overlay.rects[0].rect.position, Point(2, 1));
+	EXPECT_EQ(overlay.rects[0].rect.size, Size(1, 5));
+	EXPECT_EQ(overlay.rects[0].colorIndex, 4);
+	EXPECT_EQ(overlay.rects[0].alpha, 128);
+}
+
+TEST(RenderLayer, AutomapSteepNorthLinePreservesShadowOverdraw)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 4, 4, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	SetAutomapType(AutomapType::Opaque);
+	DrawMapLineSteepNE(out, { 1, 2 }, 1, 5);
+
+	EXPECT_EQ(*out.at(1, 3), 0);
+	EXPECT_EQ(*out.at(1, 2), 0);
+	EXPECT_EQ(*out.at(1, 1), 5);
+	EXPECT_EQ(*out.at(2, 1), 0);
+	EXPECT_EQ(*out.at(2, 0), 5);
+}
+
 TEST(RenderLayer, WorldMaskCaptureIsOptional)
 {
 	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
@@ -325,6 +515,178 @@ TEST(RenderLayer, WorldProxyCaptureIsOptional)
 
 	EXPECT_EQ(CurrentRenderWorldProxyMapView().typePixels, nullptr);
 	EXPECT_EQ(CurrentRenderWorldProxyMapView().depthPixels, nullptr);
+}
+
+TEST(RenderLayer, ClassicLightCaptureIsOptional)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	ResetRenderLayerFrameStats();
+	BeginRenderLayerFrame(out, true, false, false, false, false);
+
+	EXPECT_EQ(CurrentRenderClassicLightMapView().lightLevelPixels, nullptr);
+}
+
+TEST(RenderLayer, CapturesClassicLightLevelsForWorldPixels)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 3, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	ResetRenderLayerFrameStats();
+	BeginRenderLayerFrame(out, true, false, false, false, true);
+	{
+		RenderClassicLightScope light(7);
+		out.SetPixel({ 0, 0 }, 1);
+		{
+			RenderClassicLightScope brighterLight(3);
+			out.SetPixel({ 1, 0 }, 2);
+		}
+	}
+	{
+		RenderLayerScope interfaceLayer(RenderLayer::Interface);
+		RenderClassicLightScope interfaceLight(12);
+		out.SetPixel({ 2, 0 }, 3);
+	}
+
+	EXPECT_EQ(ClassicLightAt(0, 0), 7);
+	EXPECT_EQ(ClassicLightAt(1, 0), 3);
+	EXPECT_EQ(ClassicLightAt(2, 0), NonWorldRenderClassicLightLevel);
+
+	const RenderLayerFrameStats &stats = GetRenderLayerFrameStats();
+	EXPECT_EQ(stats.classicLightStampedSpanCount, 2);
+	EXPECT_EQ(stats.classicLightStampedPixelCount, 2);
+	EXPECT_GT(CurrentRenderClassicLightMapView().version, 0);
+}
+
+TEST(RenderLayer, NonWorldPixelsResetCapturedClassicLight)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	ResetRenderLayerFrameStats();
+	BeginRenderLayerFrame(out, true, false, false, false, true);
+	{
+		RenderClassicLightScope light(9);
+		out.SetPixel({ 0, 0 }, 1);
+	}
+	EXPECT_EQ(ClassicLightAt(0, 0), 9);
+	{
+		RenderLayerScope interfaceLayer(RenderLayer::Interface);
+		RenderClassicLightScope interfaceLight(12);
+		out.SetPixel({ 0, 0 }, 2);
+	}
+	EXPECT_EQ(ClassicLightAt(0, 0), NonWorldRenderClassicLightLevel);
+
+	const RenderLayerFrameStats &stats = GetRenderLayerFrameStats();
+	EXPECT_EQ(stats.classicLightStampedSpanCount, 1);
+	EXPECT_EQ(stats.classicLightStampedPixelCount, 1);
+}
+
+TEST(RenderLayer, ClassicLightMapResetsToNonWorldSentinelEachFrame)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	ResetRenderLayerFrameStats();
+	BeginRenderLayerFrame(out, true, false, false, false, true);
+	{
+		RenderClassicLightScope light(9);
+		out.SetPixel({ 0, 0 }, 1);
+	}
+	EXPECT_EQ(ClassicLightAt(0, 0), 9);
+	const uint64_t firstVersion = CurrentRenderClassicLightMapView().version;
+
+	BeginRenderLayerFrame(out, true, false, false, false, true);
+	EXPECT_EQ(ClassicLightAt(0, 0), NonWorldRenderClassicLightLevel);
+	EXPECT_GT(CurrentRenderClassicLightMapView().version, firstVersion);
+}
+
+TEST(RenderLayer, GeneratedClassicLightMapSkipsWorldStampsAndNeutralizesNonWorldPixels)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 2, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	ResetRenderLayerFrameStats();
+	BeginRenderLayerFrame(out, false, false, false, false, true, true);
+	EXPECT_TRUE(CurrentRenderClassicLightMapView().storesIntensity);
+	EXPECT_EQ(ClassicLightAt(0, 0), 255);
+	EXPECT_EQ(ClassicLightAt(1, 0), 255);
+
+	{
+		RenderClassicLightScope light(9);
+		out.SetPixel({ 0, 0 }, 1);
+	}
+	{
+		RenderLayerScope interfaceLayer(RenderLayer::Interface);
+		RenderClassicLightScope light(9);
+		out.SetPixel({ 1, 0 }, 2);
+	}
+
+	EXPECT_EQ(ClassicLightAt(0, 0), 255);
+	EXPECT_EQ(ClassicLightAt(1, 0), 255);
+	EXPECT_EQ(CurrentRenderLayerMapView().pixels, nullptr);
+
+	const RenderLayerFrameStats &stats = GetRenderLayerFrameStats();
+	EXPECT_EQ(stats.classicLightStampedSpanCount, 0);
+	EXPECT_EQ(stats.classicLightStampedPixelCount, 0);
+	EXPECT_EQ(stats.stampedSpanCount, 0);
+	EXPECT_EQ(stats.stampedPixelCount, 0);
+}
+
+TEST(RenderLayer, TracksClassicLightDungeonGridForComposition)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	std::array<uint8_t, 4> grid { 1, 2, 3, 4 };
+	ResetRenderLayerFrameStats();
+	BeginRenderLayerFrame(out, false, false, false, false, false, false, true);
+	SetRenderClassicLightGrid(grid.data(), { 2, 2 }, 2, { 7, 8 }, { 9, -10 }, 123);
+
+	RenderClassicLightMapView view = CurrentRenderClassicLightMapView();
+	ASSERT_NE(view.lightLevelPixels, nullptr);
+	EXPECT_EQ(view.width, 2);
+	EXPECT_EQ(view.height, 2);
+	EXPECT_EQ(view.pitch, 2);
+	EXPECT_EQ(view.lightLevelPixels[0], 1);
+	EXPECT_EQ(view.lightLevelPixels[3], 4);
+	EXPECT_FALSE(view.storesIntensity);
+	EXPECT_TRUE(view.storesDungeonGrid);
+	EXPECT_EQ(view.firstTile, Point(7, 8));
+	EXPECT_EQ(view.offset, Displacement(9, -10));
+	EXPECT_EQ(view.viewportHeight, 123);
+	const uint64_t firstVersion = view.version;
+	EXPECT_GT(firstVersion, 0);
+
+	BeginRenderLayerFrame(out, false, false, false, false, false, false, true);
+	view = CurrentRenderClassicLightMapView();
+	ASSERT_NE(view.lightLevelPixels, nullptr);
+	EXPECT_EQ(view.version, firstVersion);
+	EXPECT_EQ(view.lightLevelPixels[1], 2);
+
+	BeginRenderLayerFrame(out, false, false, false, false, false, false, false);
+	EXPECT_EQ(CurrentRenderClassicLightMapView().lightLevelPixels, nullptr);
+}
+
+TEST(RenderLayer, TracksSmoothLightSourcesForComposition)
+{
+	SDLSurfaceUniquePtr surface = SDLWrap::CreateRGBSurfaceWithFormat(0, 1, 1, 8, SDL_PIXELFORMAT_INDEX8);
+	Surface out(surface.get());
+
+	ResetRenderLayerFrameStats();
+	BeginRenderLayerFrame(out, true, false, false, false, true);
+	std::vector<RenderSmoothLightSource> sources {
+		{ { 12, 34 }, 8, FullyLitRenderClassicLightLevel, LightsMax },
+	};
+	SetRenderSmoothLightSources(std::move(sources));
+
+	const RenderSmoothLightSourceView view = CurrentRenderSmoothLightSourceView();
+	ASSERT_NE(view.sources, nullptr);
+	EXPECT_EQ(view.count, 1U);
+	EXPECT_EQ(view.sources[0].screenPosition, Point(12, 34));
+	EXPECT_GT(view.version, 0);
+	EXPECT_EQ(GetRenderLayerFrameStats().smoothLightSourceCount, 1);
 }
 
 TEST(RenderLayer, CapturesFloorDiamondWorldProxy)

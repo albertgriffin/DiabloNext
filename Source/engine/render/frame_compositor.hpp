@@ -139,6 +139,8 @@ struct CompositionFrame {
 	RenderWorldMaskDiagnosticMode renderWorldMaskDiagnosticMode = RenderWorldMaskDiagnosticMode::Off;
 	RenderWorldProxyMapView worldProxyMap;
 	RenderWorldProxyDiagnosticMode renderWorldProxyDiagnosticMode = RenderWorldProxyDiagnosticMode::Off;
+	RenderClassicLightMapView classicLightMap;
+	RenderSmoothLightSourceView smoothLightSources;
 };
 
 enum class FrameCompositorBackendResult : uint8_t {
@@ -159,6 +161,7 @@ public:
 	[[nodiscard]] virtual std::string_view Name() const = 0;
 	[[nodiscard]] virtual bool IsAvailable() const = 0;
 	[[nodiscard]] virtual bool CanRetainDirectPresentation() const { return false; }
+	[[nodiscard]] virtual bool CanConsumeClassicLightMapDirectly() const { return false; }
 	[[nodiscard]] virtual FrameCompositorBackendResult Compose(const CompositionFrame &frame, SDL_Surface &outputSurface, const std::vector<Rectangle> &rects, RenderPerfCompositionStats &stats) = 0;
 	virtual void Present() { }
 };
@@ -227,8 +230,11 @@ private:
 	RenderWorldMaskDiagnosticMode renderWorldMaskDiagnosticMode_ = RenderWorldMaskDiagnosticMode::Off;
 	RenderWorldProxyMapView worldProxyMap_ {};
 	RenderWorldProxyDiagnosticMode renderWorldProxyDiagnosticMode_ = RenderWorldProxyDiagnosticMode::Off;
+	RenderClassicLightMapView classicLightMap_ {};
+	RenderSmoothLightSourceView smoothLightSources_ {};
 	bool hasComposedFrame_ = false;
 	uint64_t lastComposedPaletteVersion_ = 0;
+	uint64_t lastComposedClassicLightMapVersion_ = 0;
 	bool lastComposedDiagnosticTransformEnabled_ = false;
 	RenderLayerDiagnosticMode lastRenderLayerDiagnosticMode_ = RenderLayerDiagnosticMode::Off;
 	RenderWorldMaskDiagnosticMode lastRenderWorldMaskDiagnosticMode_ = RenderWorldMaskDiagnosticMode::Off;

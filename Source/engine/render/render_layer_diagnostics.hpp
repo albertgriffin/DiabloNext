@@ -5,7 +5,12 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+
+#include "engine/displacement.hpp"
+#include "engine/point.hpp"
+#include "engine/rectangle.hpp"
 
 namespace devilution {
 
@@ -69,6 +74,10 @@ struct RenderLayerMapView {
 	int width = 0;
 	int height = 0;
 	int pitch = 0;
+	const Rectangle *dirtyRects = nullptr;
+	size_t dirtyRectCount = 0;
+	bool dirtyFullFrame = false;
+	uint64_t version = 0;
 };
 
 struct RenderWorldMaskMapView {
@@ -94,8 +103,44 @@ struct RenderWorldProxyMapView {
 	uint64_t version = 0;
 };
 
+struct RenderClassicLightMapView {
+	const uint8_t *lightLevelPixels = nullptr;
+	int width = 0;
+	int height = 0;
+	int pitch = 0;
+	uint64_t version = 0;
+	bool storesIntensity = false;
+	bool storesDungeonGrid = false;
+	Point firstTile {};
+	Displacement offset {};
+	int viewportHeight = 0;
+};
+
+struct MutableRenderClassicLightMapView {
+	uint8_t *pixels = nullptr;
+	int width = 0;
+	int height = 0;
+	int pitch = 0;
+	bool storesIntensity = false;
+};
+
+struct RenderSmoothLightSource {
+	Point screenPosition;
+	uint8_t radius = 0;
+	uint8_t centerLightLevel = 0;
+	uint8_t edgeLightLevel = 15;
+};
+
+struct RenderSmoothLightSourceView {
+	const RenderSmoothLightSource *sources = nullptr;
+	size_t count = 0;
+	uint64_t version = 0;
+};
+
 inline constexpr uint8_t UnknownRenderLayerId = 0xFF;
 inline constexpr uint8_t UnknownRenderWorldMaterialId = static_cast<uint8_t>(RenderWorldMaterial::Unknown);
 inline constexpr uint8_t UnknownRenderWorldProxyPrimitiveId = 0xFF;
+inline constexpr uint8_t FullyLitRenderClassicLightLevel = 0;
+inline constexpr uint8_t NonWorldRenderClassicLightLevel = 0xFF;
 
 } // namespace devilution

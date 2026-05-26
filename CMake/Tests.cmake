@@ -90,7 +90,7 @@ foreach(test_target ${tests} ${standalone_tests} ${benchmarks})
 endforeach()
 
 foreach(test_target ${tests} ${standalone_tests})
-  gtest_discover_tests(${test_target})
+  gtest_discover_tests(${test_target} DISCOVERY_TIMEOUT 30)
 endforeach()
 
 foreach(test_target ${tests})

@@ -5,11 +5,15 @@
  */
 #include "engine/render/scrollrt.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #ifdef USE_SDL3
@@ -34,13 +38,18 @@
 #include "engine/backbuffer_state.hpp"
 #include "engine/displacement.hpp"
 #include "engine/dx.h"
+#include "engine/palette.h"
 #include "engine/point.hpp"
+#include "engine/render/accelerated_compositor_lifecycle.hpp"
+#include "engine/render/automap_render.hpp"
 #include "engine/render/clx_render.hpp"
 #include "engine/render/dun_render.hpp"
 #include "engine/render/light_shadow_diagnostics.hpp"
 #include "engine/render/render_layer.hpp"
 #include "engine/render/render_perf.hpp"
+#include "engine/render/sdl_gpu_palette_compositor.hpp"
 #include "engine/render/text_render.hpp"
+#include "engine/surface.hpp"
 #include "engine/trn.hpp"
 #include "engine/world_tile.hpp"
 #include "game_mode.hpp"
@@ -57,6 +66,7 @@
 #include "lua/lua_event.hpp"
 #include "minitext.h"
 #include "missiles.h"
+#include "multi.h"
 #include "nthread.h"
 #include "options.h"
 #include "panels/charpanel.hpp"
@@ -117,6 +127,407 @@ namespace {
 
 constexpr auto RightFrameDisplacement = Displacement { DunFrameWidth, 0 };
 
+enum class RetainedSidePanelKind : uint8_t {
+	None,
+	Inventory,
+	Character,
+};
+
+struct RetainedSidePanelCache {
+	bool valid = false;
+	RetainedSidePanelKind kind = RetainedSidePanelKind::None;
+	Rectangle rect {};
+	uint64_t fingerprint = 0;
+	uint64_t paletteVersion = 0;
+	std::vector<uint8_t> pixels;
+};
+
+struct RetainedOverlaySpan {
+	Point position;
+	std::vector<uint8_t> pixels;
+};
+
+struct RetainedSparseOverlayCache {
+	bool valid = false;
+	Rectangle rect {};
+	uint64_t fingerprint = 0;
+	uint64_t paletteVersion = 0;
+	std::vector<RetainedOverlaySpan> spans;
+};
+
+[[nodiscard]] bool AcceleratedClassicLightingEnabledForWorld()
+{
+	const auto &experimental = GetOptions().Experimental;
+	return *experimental.renderAcceleratedClassicLighting
+	    && *experimental.renderFrameCompositor
+	    && *experimental.renderFrameCompositorBackend == RenderFrameCompositorBackend::SdlGpuPalette
+	    && AcceleratedFrameCompositorActiveApi() == AcceleratedCompositorApi::SdlGpu;
+}
+
+[[nodiscard]] bool RetainedSidePanelsEnabledForFrame()
+{
+	return AcceleratedClassicLightingEnabledForWorld()
+	    && AutomapActive;
+}
+
+[[nodiscard]] uint64_t HashCombine(const uint64_t hash, const uint64_t value)
+{
+	return hash ^ (value + 0x9E3779B97F4A7C15ULL + (hash << 6) + (hash >> 2));
+}
+
+[[nodiscard]] uint64_t HashSigned(const int64_t value)
+{
+	return static_cast<uint64_t>(value) ^ 0x8000000000000000ULL;
+}
+
+[[nodiscard]] uint64_t HashString(uint64_t hash, const std::string_view value)
+{
+	for (const char ch : value)
+		hash = HashCombine(hash, static_cast<uint8_t>(ch));
+	return HashCombine(hash, value.size());
+}
+
+[[nodiscard]] uint64_t HashItemForRetainedPanel(const Item &item)
+{
+	uint64_t hash = 0xCBF29CE484222325ULL;
+	hash = HashCombine(hash, static_cast<uint64_t>(item._itype));
+	if (item.isEmpty())
+		return hash;
+
+	hash = HashCombine(hash, item._iSeed);
+	hash = HashCombine(hash, item._iCreateInfo);
+	hash = HashCombine(hash, item._iCurs);
+	hash = HashCombine(hash, item._ivalue);
+	hash = HashCombine(hash, item._iIvalue);
+	hash = HashCombine(hash, item._iMinDam);
+	hash = HashCombine(hash, item._iMaxDam);
+	hash = HashCombine(hash, HashSigned(item._iAC));
+	hash = HashCombine(hash, static_cast<uint64_t>(item._iFlags));
+	hash = HashCombine(hash, static_cast<uint64_t>(item._iMiscId));
+	hash = HashCombine(hash, static_cast<uint64_t>(item._iSpell));
+	hash = HashCombine(hash, static_cast<uint64_t>(item.IDidx));
+	hash = HashCombine(hash, HashSigned(item._iCharges));
+	hash = HashCombine(hash, HashSigned(item._iMaxCharges));
+	hash = HashCombine(hash, HashSigned(item._iDurability));
+	hash = HashCombine(hash, HashSigned(item._iMaxDur));
+	hash = HashCombine(hash, item._iIdentified ? 1 : 0);
+	hash = HashCombine(hash, static_cast<uint64_t>(item._iMagical));
+	hash = HashCombine(hash, item._iStatFlag ? 1 : 0);
+	hash = HashCombine(hash, HashSigned(item._iPLStr));
+	hash = HashCombine(hash, HashSigned(item._iPLMag));
+	hash = HashCombine(hash, HashSigned(item._iPLDex));
+	hash = HashCombine(hash, HashSigned(item._iPLVit));
+	hash = HashCombine(hash, HashSigned(item._iPLFR));
+	hash = HashCombine(hash, HashSigned(item._iPLLR));
+	hash = HashCombine(hash, HashSigned(item._iPLMR));
+	hash = HashCombine(hash, HashSigned(item._iPLMana));
+	hash = HashCombine(hash, HashSigned(item._iPLHP));
+	return hash;
+}
+
+[[nodiscard]] uint64_t InventoryPanelFingerprint()
+{
+	const Player &player = *InspectPlayer;
+	uint64_t hash = 0x84222325CBF29CE4ULL;
+	hash = HashCombine(hash, static_cast<uint8_t>(pcursinvitem));
+	hash = HashCombine(hash, player._pNumInv);
+	hash = HashCombine(hash, HashSigned(player._pGold));
+	hash = HashCombine(hash, MyPlayer->HoldItem.isEmpty() ? 0 : HashItemForRetainedPanel(MyPlayer->HoldItem));
+
+	for (const Item &item : player.InvBody)
+		hash = HashCombine(hash, HashItemForRetainedPanel(item));
+	for (int cell : player.InvGrid)
+		hash = HashCombine(hash, HashSigned(cell));
+	for (const Item &item : player.InvList)
+		hash = HashCombine(hash, HashItemForRetainedPanel(item));
+	return hash;
+}
+
+[[nodiscard]] uint64_t CharacterPanelFingerprint()
+{
+	const Player &player = *InspectPlayer;
+	uint64_t hash = 0x29CE484222325CBFULL;
+	hash = HashCombine(hash, player.getId());
+	hash = HashCombine(hash, player.getCharacterLevel());
+	hash = HashCombine(hash, player._pExperience);
+	hash = HashCombine(hash, player.getNextExperienceThreshold());
+	hash = HashCombine(hash, HashSigned(player._pGold));
+	hash = HashCombine(hash, player._pStatPts);
+	hash = HashCombine(hash, player._pBaseStr);
+	hash = HashCombine(hash, player._pBaseMag);
+	hash = HashCombine(hash, player._pBaseDex);
+	hash = HashCombine(hash, player._pBaseVit);
+	hash = HashCombine(hash, player._pStrength);
+	hash = HashCombine(hash, player._pMagic);
+	hash = HashCombine(hash, player._pDexterity);
+	hash = HashCombine(hash, player._pVitality);
+	hash = HashCombine(hash, HashSigned(player._pHitPoints));
+	hash = HashCombine(hash, HashSigned(player._pMaxHP));
+	hash = HashCombine(hash, HashSigned(player._pMana));
+	hash = HashCombine(hash, HashSigned(player._pMaxMana));
+	hash = HashCombine(hash, player._pIBonusAC);
+	hash = HashCombine(hash, player._pIBonusToHit);
+	hash = HashCombine(hash, player._pIBonusDam);
+	for (bool button : CharPanelButton)
+		hash = HashCombine(hash, button ? 1 : 0);
+	hash = HashCombine(hash, CharPanelButtonActive ? 1 : 0);
+	return hash;
+}
+
+[[nodiscard]] uint64_t AutomapTextFingerprint()
+{
+	uint64_t hash = 0x94D049BB133111EBULL;
+	hash = HashCombine(hash, *GetOptions().Graphics.showFPS ? 1 : 0);
+	hash = HashCombine(hash, gbIsMultiplayer ? 1 : 0);
+	hash = HashString(hash, GameName);
+	hash = HashString(hash, GamePassword);
+	hash = HashCombine(hash, PublicGame ? 1 : 0);
+	hash = HashCombine(hash, IsLoopback ? 1 : 0);
+	hash = HashCombine(hash, setlevel ? 1 : 0);
+	hash = HashCombine(hash, static_cast<uint64_t>(setlvlnum));
+	hash = HashCombine(hash, leveltype);
+	hash = HashCombine(hash, currlevel);
+	hash = HashCombine(hash, static_cast<uint64_t>(sgGameInitInfo.nDifficulty));
+#ifdef _DEBUG
+	hash = HashCombine(hash, DebugGodMode ? 1 : 0);
+	hash = HashCombine(hash, DebugInvisible ? 1 : 0);
+	hash = HashCombine(hash, DisableLighting ? 1 : 0);
+	hash = HashCombine(hash, DebugVision ? 1 : 0);
+	hash = HashCombine(hash, DebugPath ? 1 : 0);
+	hash = HashCombine(hash, DebugGrid ? 1 : 0);
+	hash = HashCombine(hash, DebugScrollViewEnabled ? 1 : 0);
+#endif
+	return hash;
+}
+
+[[nodiscard]] bool SameRect(const Rectangle &left, const Rectangle &right)
+{
+	return left.position == right.position && left.size == right.size;
+}
+
+void SaveRetainedSidePanel(const Surface &out, const Rectangle rect, RetainedSidePanelCache &cache)
+{
+	cache.pixels.resize(static_cast<size_t>(rect.size.width) * rect.size.height);
+	uint8_t *dst = cache.pixels.data();
+	for (int y = 0; y < rect.size.height; y++) {
+		std::memcpy(dst, out.at(rect.position.x, rect.position.y + y), rect.size.width);
+		dst += rect.size.width;
+	}
+}
+
+void RestoreRetainedSidePanel(const Surface &out, const Rectangle rect, const RetainedSidePanelCache &cache)
+{
+	const uint8_t *src = cache.pixels.data();
+	for (int y = 0; y < rect.size.height; y++) {
+		std::memcpy(out.at(rect.position.x, rect.position.y + y), src, rect.size.width);
+		src += rect.size.width;
+	}
+	MarkRenderLayerRect(RenderLayer::Interface, rect);
+}
+
+[[nodiscard]] Rectangle ClipRectToSurface(Rectangle rect, const Surface &out)
+{
+	const int x0 = std::clamp(rect.position.x, 0, out.w());
+	const int y0 = std::clamp(rect.position.y, 0, out.h());
+	const int x1 = std::clamp(rect.position.x + rect.size.width, 0, out.w());
+	const int y1 = std::clamp(rect.position.y + rect.size.height, 0, out.h());
+	return { { x0, y0 }, { std::max(0, x1 - x0), std::max(0, y1 - y0) } };
+}
+
+[[nodiscard]] bool RectEmpty(const Rectangle &rect)
+{
+	return rect.size.width <= 0 || rect.size.height <= 0;
+}
+
+void RestoreRetainedOverlay(const Surface &out, const RetainedSparseOverlayCache &cache)
+{
+	for (const RetainedOverlaySpan &span : cache.spans) {
+		if (span.pixels.empty())
+			continue;
+		std::memcpy(out.at(span.position.x, span.position.y), span.pixels.data(), span.pixels.size());
+		MarkRenderLayerSpan(out, span.position, static_cast<int>(span.pixels.size()));
+	}
+}
+
+template <typename DrawOverlay>
+void DrawOrRestoreRetainedOverlay(
+    const Surface &out,
+    RetainedSparseOverlayCache &cache,
+    Rectangle rect,
+    const uint64_t fingerprint,
+    DrawOverlay &&drawOverlay)
+{
+	rect = ClipRectToSurface(rect, out);
+	if (RectEmpty(rect)) {
+		cache.valid = false;
+		return;
+	}
+
+	const uint64_t paletteVersion = SystemPaletteVersion();
+	if (cache.valid
+	    && SameRect(cache.rect, rect)
+	    && cache.fingerprint == fingerprint
+	    && cache.paletteVersion == paletteVersion) {
+		RestoreRetainedOverlay(out, cache);
+		return;
+	}
+
+	std::vector<uint8_t> before(static_cast<size_t>(rect.size.width) * rect.size.height);
+	uint8_t *snapshot = before.data();
+	for (int y = 0; y < rect.size.height; y++) {
+		std::memcpy(snapshot, out.at(rect.position.x, rect.position.y + y), rect.size.width);
+		snapshot += rect.size.width;
+	}
+
+	drawOverlay(out);
+
+	cache.valid = true;
+	cache.rect = rect;
+	cache.fingerprint = fingerprint;
+	cache.paletteVersion = paletteVersion;
+	cache.spans.clear();
+
+	const uint8_t *beforeRow = before.data();
+	for (int y = 0; y < rect.size.height; y++) {
+		const uint8_t *afterRow = out.at(rect.position.x, rect.position.y + y);
+		int x = 0;
+		while (x < rect.size.width) {
+			while (x < rect.size.width && beforeRow[x] == afterRow[x])
+				x++;
+			const int start = x;
+			while (x < rect.size.width && beforeRow[x] != afterRow[x])
+				x++;
+			if (start == x)
+				continue;
+			RetainedOverlaySpan span {
+				{ rect.position.x + start, rect.position.y + y },
+				std::vector<uint8_t>(afterRow + start, afterRow + x),
+			};
+			cache.spans.push_back(std::move(span));
+		}
+		beforeRow += rect.size.width;
+	}
+}
+
+void DrawOrRestoreAutomapText(const Surface &out)
+{
+	static RetainedSparseOverlayCache cache;
+	const Rectangle bounds { { 0, 0 }, { std::min(out.w(), 640), std::min(out.h(), 180) } };
+	DrawOrRestoreRetainedOverlay(out, cache, bounds, AutomapTextFingerprint(), [](const Surface &out) {
+		DrawAutomapText(out);
+	});
+}
+
+template <typename DrawPanel>
+void DrawOrRestoreRetainedSidePanel(
+    const Surface &out,
+    RetainedSidePanelCache &cache,
+    Rectangle rect,
+    const RetainedSidePanelKind kind,
+    const uint64_t fingerprint,
+    DrawPanel &&drawPanel)
+{
+	rect = ClipRectToSurface(rect, out);
+	if (RectEmpty(rect)) {
+		cache.valid = false;
+		drawPanel(out);
+		return;
+	}
+
+	const uint64_t paletteVersion = SystemPaletteVersion();
+	if (!RetainedSidePanelsEnabledForFrame()) {
+		cache.valid = false;
+		drawPanel(out);
+		return;
+	}
+
+	const bool cacheValid = cache.valid
+	    && cache.kind == kind
+	    && SameRect(cache.rect, rect)
+	    && cache.fingerprint == fingerprint
+	    && cache.paletteVersion == paletteVersion
+	    && cache.pixels.size() == static_cast<size_t>(rect.size.width) * rect.size.height;
+	if (cacheValid) {
+		RestoreRetainedSidePanel(out, rect, cache);
+		return;
+	}
+
+	drawPanel(out);
+	cache.valid = true;
+	cache.kind = kind;
+	cache.rect = rect;
+	cache.fingerprint = fingerprint;
+	cache.paletteVersion = paletteVersion;
+	SaveRetainedSidePanel(out, rect, cache);
+}
+
+[[nodiscard]] std::string_view RenderFrameCompositorBackendLabel(const RenderFrameCompositorBackend backend)
+{
+	switch (backend) {
+	case RenderFrameCompositorBackend::CpuPalette:
+		return "CPU PALETTE";
+	case RenderFrameCompositorBackend::OpenGlPalette:
+		return "OPENGL PALETTE";
+	case RenderFrameCompositorBackend::SdlGpuPalette:
+		return "SDL_GPU PALETTE";
+	}
+	return "UNKNOWN";
+}
+
+void AppendAcceleratedClassicLightingStatus(std::vector<std::string> &lines)
+{
+	const auto &experimental = GetOptions().Experimental;
+	const bool active = AcceleratedClassicLightingEnabledForWorld();
+	lines.emplace_back(StrCat("RENDER: ACCEL CLASSIC LIGHTING OPTION ", active ? "ACTIVE" : "ON, INACTIVE"));
+	if (active) {
+		lines.emplace_back("LIGHTING: WORLD IN SDL_GPU RGB; PANEL NEUTRAL");
+		lines.emplace_back(CurrentRenderClassicLightMapView().storesDungeonGrid
+		        ? "LIGHTING: SMOOTH CLASSIC dLight GRID"
+		        : "LIGHTING: WAITING FOR CLASSIC dLight GRID");
+		return;
+	}
+
+	if (!*experimental.renderFrameCompositor) {
+		lines.emplace_back("LIGHTING INACTIVE: FRAME COMPOSITOR OPTION OFF");
+		return;
+	}
+	if (*experimental.renderFrameCompositorBackend != RenderFrameCompositorBackend::SdlGpuPalette) {
+		lines.emplace_back(StrCat("LIGHTING INACTIVE: BACKEND ", RenderFrameCompositorBackendLabel(*experimental.renderFrameCompositorBackend)));
+		lines.emplace_back("SELECT BACKEND: SDL_GPU PALETTE");
+		return;
+	}
+
+	if (!AcceleratedFrameCompositorRequestedBackendBuildAvailable()) {
+		lines.emplace_back("SDL_GPU COMPOSITOR NOT BUILT IN THIS BINARY");
+		lines.emplace_back("BUILD WITH USE_SDL3 + SDL_GPU PALETTE");
+		return;
+	}
+
+	const AcceleratedCompositorApi requestedApi = AcceleratedFrameCompositorRequestedApi();
+	const AcceleratedCompositorApi activeApi = AcceleratedFrameCompositorActiveApi();
+	lines.emplace_back(StrCat("LIGHTING INACTIVE: REQUESTED ", AcceleratedCompositorApiName(requestedApi), ", ACTIVE ", AcceleratedCompositorApiName(activeApi)));
+	lines.emplace_back("SDL_GPU BACKEND FAILED TO INITIALIZE");
+}
+
+[[nodiscard]] const uint8_t *UnlitWorldLightTable()
+{
+	static constexpr auto IdentityLightTable = [] {
+		std::array<uint8_t, 256> table {};
+		for (size_t i = 0; i < table.size(); i++) {
+			table[i] = static_cast<uint8_t>(i);
+		}
+		return table;
+	}();
+	return IdentityLightTable.data();
+}
+
+[[nodiscard]] const uint8_t *WorldLightTableForDraw(const int lightTableIndex)
+{
+	if (AcceleratedClassicLightingEnabledForWorld())
+		return FullyLitLightTable != nullptr ? FullyLitLightTable : UnlitWorldLightTable();
+	return LightTables[lightTableIndex].data();
+}
+
 [[nodiscard]] bool RenderLayerCaptureNeededForFrameComposition()
 {
 	if (!*GetOptions().Experimental.renderFrameCompositor)
@@ -127,8 +538,20 @@ constexpr auto RightFrameDisplacement = Displacement { DunFrameWidth, 0 };
 		return true;
 	if (*GetOptions().Experimental.renderWorldProxyDiagnosticMode != RenderWorldProxyDiagnosticMode::Off)
 		return true;
+	if (AcceleratedClassicLightingEnabledForWorld())
+		return true;
 	return *GetOptions().Experimental.renderFrameCompositorBackend == RenderFrameCompositorBackend::SdlGpuPalette
 	    && *GetOptions().Experimental.renderLightShadowDiagnosticMode != RenderLightShadowDiagnosticMode::Off;
+}
+
+[[nodiscard]] bool RenderLayerCaptureDefaultsToWorldForFrameComposition()
+{
+	const auto &experimental = GetOptions().Experimental;
+	return AcceleratedClassicLightingEnabledForWorld()
+	    && *experimental.renderLayerDiagnosticMode == RenderLayerDiagnosticMode::Off
+	    && *experimental.renderWorldMaskDiagnosticMode == RenderWorldMaskDiagnosticMode::Off
+	    && *experimental.renderWorldProxyDiagnosticMode == RenderWorldProxyDiagnosticMode::Off
+	    && *experimental.renderLightShadowDiagnosticMode == RenderLightShadowDiagnosticMode::Off;
 }
 
 [[nodiscard]] bool RenderWorldMaskCaptureNeededForFrameComposition()
@@ -143,9 +566,72 @@ constexpr auto RightFrameDisplacement = Displacement { DunFrameWidth, 0 };
 	    && *GetOptions().Experimental.renderWorldProxyDiagnosticMode != RenderWorldProxyDiagnosticMode::Off;
 }
 
+[[nodiscard]] bool RenderClassicLightCaptureNeededForFrameComposition()
+{
+	return false;
+}
+
+[[nodiscard]] bool RenderClassicLightGeneratedIntensityMapNeededForFrameComposition()
+{
+	return false;
+}
+
+[[nodiscard]] bool RenderClassicLightGridNeededForFrameComposition()
+{
+	return AcceleratedClassicLightingEnabledForWorld();
+}
+
+void SubmitAcceleratedClassicLightGrid(const Point firstTile, const Displacement offset)
+{
+	if (!AcceleratedClassicLightingEnabledForWorld())
+		return;
+
+	std::array<uint8_t, MAXDUNX * MAXDUNY> lightGrid {};
+	for (int y = 0; y < MAXDUNY; y++) {
+		for (int x = 0; x < MAXDUNX; x++) {
+			lightGrid[static_cast<size_t>(y) * MAXDUNX + x] = std::min<uint8_t>(dLight[x][y], LightsMax);
+		}
+	}
+	SetRenderClassicLightGrid(lightGrid.data(), { MAXDUNX, MAXDUNY }, MAXDUNX, firstTile, offset, gnViewportHeight);
+}
+
+void MarkPersistentInterfaceLayerOwnership()
+{
+	if (!RenderLayerCaptureNeededForFrameComposition())
+		return;
+
+	MarkRenderLayerRect(RenderLayer::Interface, GetMainPanel());
+	if (IsLeftPanelOpen())
+		MarkRenderLayerRect(RenderLayer::Interface, GetLeftPanel());
+	if (IsRightPanelOpen())
+		MarkRenderLayerRect(RenderLayer::Interface, GetRightPanel());
+}
+
 [[nodiscard]] uint8_t ReceiverOccluder()
 {
 	return RenderWorldMaskReceiver | RenderWorldMaskOccluder;
+}
+
+[[nodiscard]] bool ObjectEmitsClassicLight(const Object &object)
+{
+	switch (object._otype) {
+	case OBJ_STORYCANDLE:
+	case OBJ_L5CANDLE:
+	case OBJ_L1LIGHT:
+	case OBJ_SKFIRE:
+	case OBJ_CANDLE1:
+	case OBJ_CANDLE2:
+	case OBJ_BOOKCANDLE:
+	case OBJ_BCROSS:
+	case OBJ_TBCROSS:
+	case OBJ_TORCHL:
+	case OBJ_TORCHR:
+	case OBJ_TORCHL2:
+	case OBJ_TORCHR2:
+		return true;
+	default:
+		return false;
+	}
 }
 
 [[nodiscard]] DVL_ALWAYS_INLINE bool IsFloor(Point tilePosition)
@@ -335,6 +821,11 @@ void BlitCursor(uint8_t *dst, uint32_t dstPitch, uint8_t *src, uint32_t srcPitch
 void UndrawCursor(const Surface &out)
 {
 	DrawnCursor &cursor = GetDrawnCursor();
+	if (cursor.rect.size.width <= 0 || cursor.rect.size.height <= 0) {
+		cursor.behindLayerBufferValid = false;
+		PrevCursorRect = cursor.rect;
+		return;
+	}
 	BlitCursor(&out[cursor.rect.position], out.pitch(), cursor.behindBuffer, cursor.rect.size.width, cursor.rect.size.width, cursor.rect.size.height);
 	if (cursor.behindLayerBufferValid)
 		RestoreRenderLayerMapRegion(cursor.rect, cursor.behindLayerBuffer, cursor.rect.size.width);
@@ -356,6 +847,281 @@ bool ShouldShowCursor()
 	return false;
 }
 
+[[nodiscard]] bool GpuCursorOverlayEnabledForFrame()
+{
+	return AcceleratedClassicLightingEnabledForWorld()
+	    && SdlGpuPaletteCompositorGpuCursorOverlayAvailable();
+}
+
+[[nodiscard]] bool GpuAutomapOverlayEnabledForFrame()
+{
+	return AcceleratedClassicLightingEnabledForWorld()
+	    && GetAutomapType() != AutomapType::Minimap
+	    && SdlGpuPaletteCompositorGpuAutomapOverlayAvailable();
+}
+
+struct AutomapOverlayCacheKey {
+	Point mapBlock {};
+	int autoMapScale = 0;
+	int screenWidth = 0;
+	int screenHeight = 0;
+	int viewportHeight = 0;
+	bool canPanelsCoverView = false;
+	bool leftPanelOpen = false;
+	bool rightPanelOpen = false;
+};
+
+struct AutomapOverlayCache {
+	bool valid = false;
+	AutomapOverlayCacheKey key {};
+	AutomapOverlayGeometryPlacement placement {};
+	uint64_t version = 0;
+	std::vector<RenderAutomapOverlayRect> rects;
+};
+
+[[nodiscard]] bool operator==(const AutomapOverlayCacheKey &left, const AutomapOverlayCacheKey &right)
+{
+	return left.mapBlock == right.mapBlock
+	    && left.autoMapScale == right.autoMapScale
+	    && left.screenWidth == right.screenWidth
+	    && left.screenHeight == right.screenHeight
+	    && left.viewportHeight == right.viewportHeight
+	    && left.canPanelsCoverView == right.canPanelsCoverView
+	    && left.leftPanelOpen == right.leftPanelOpen
+	    && left.rightPanelOpen == right.rightPanelOpen;
+}
+
+constexpr int AutomapOverlayCachePaddingCells = 10;
+constexpr int AutomapOverlayCacheBlockCells = 8;
+
+[[nodiscard]] int FloorDiv(const int value, const int divisor)
+{
+	if (value >= 0)
+		return value / divisor;
+	return -((-value + divisor - 1) / divisor);
+}
+
+[[nodiscard]] AutomapOverlayCacheKey CurrentAutomapOverlayCacheKey(const AutomapOverlayGeometryPlacement placement)
+{
+	return {
+		{ FloorDiv(placement.map.x, AutomapOverlayCacheBlockCells), FloorDiv(placement.map.y, AutomapOverlayCacheBlockCells) },
+		AutoMapScale,
+		gnScreenWidth,
+		gnScreenHeight,
+		gnViewportHeight,
+		CanPanelsCoverView(),
+		IsLeftPanelOpen(),
+		IsRightPanelOpen(),
+	};
+}
+
+[[nodiscard]] Displacement CurrentAutomapOverlayWalkingOffset()
+{
+	if (MyPlayer == nullptr || !MyPlayer->isWalking())
+		return {};
+
+	const Displacement walkingOffset = GetOffsetForWalking(MyPlayer->AnimInfo, MyPlayer->_pdir, true);
+	const int scale = AutoMapScale;
+	return {
+		scale * walkingOffset.deltaX / 100 / 2,
+		scale * walkingOffset.deltaY / 100 / 2,
+	};
+}
+
+[[nodiscard]] bool AutomapOverlayCacheAllowed()
+{
+	if (AutoMapShowItems || gbIsMultiplayer)
+		return false;
+	if (CanPanelsCoverView() && (IsLeftPanelOpen() || IsRightPanelOpen()))
+		return false;
+#ifdef _DEBUG
+	if (IsDebugAutomapHighlightNeeded())
+		return false;
+#endif
+	return true;
+}
+
+constexpr size_t GpuAutomapOverlayMaxRejectRects = 4;
+constexpr int MainPanelOverlayTopPadding = 64;
+
+[[nodiscard]] Rectangle BottomInterfaceRejectRect()
+{
+	const Rectangle &mainPanel = GetMainPanel();
+	const int top = std::max(0, mainPanel.position.y - MainPanelOverlayTopPadding);
+	const int bottom = std::min(static_cast<int>(gnScreenHeight), mainPanel.position.y + mainPanel.size.height);
+	return { { mainPanel.position.x, top }, { mainPanel.size.width, std::max(0, bottom - top) } };
+}
+
+[[nodiscard]] Rectangle RightInterfaceRejectRect()
+{
+	return invflag ? GetInventoryPanelRect() : GetRightPanel();
+}
+
+void SetGpuAutomapOverlayRejectRects()
+{
+	std::array<Rectangle, GpuAutomapOverlayMaxRejectRects> rejectRects {};
+	size_t rejectRectCount = 0;
+	auto appendRejectRect = [&](const Rectangle &rect) {
+		if (rejectRectCount >= rejectRects.size() || rect.size.width <= 0 || rect.size.height <= 0)
+			return;
+		rejectRects[rejectRectCount] = rect;
+		rejectRectCount++;
+	};
+
+	appendRejectRect(BottomInterfaceRejectRect());
+	if (IsLeftPanelOpen())
+		appendRejectRect(GetLeftPanel());
+	if (IsRightPanelOpen())
+		appendRejectRect(RightInterfaceRejectRect());
+
+	SetSdlGpuPaletteCompositorAutomapOverlayRejectRects(rejectRects.data(), rejectRectCount);
+}
+
+void SubmitGpuAutomapOverlay(const Surface &out)
+{
+	static AutomapOverlayCache cache;
+	const bool cacheAllowed = AutomapOverlayCacheAllowed();
+	const AutomapOverlayGeometryPlacement currentPlacement = GetAutomapOverlayGeometryPlacement();
+	const AutomapOverlayCacheKey cacheKey = CurrentAutomapOverlayCacheKey(currentPlacement);
+	const Displacement walkingOffset = CurrentAutomapOverlayWalkingOffset();
+	SetGpuAutomapOverlayRejectRects();
+	if (cacheAllowed && cache.valid && cache.key == cacheKey) {
+		SetSdlGpuPaletteCompositorAutomapOverlay({
+		    cache.rects.data(),
+		    cache.rects.size(),
+		    cache.version,
+		    !cache.rects.empty(),
+		});
+		SetSdlGpuPaletteCompositorAutomapOverlayOffset(GetAutomapOverlayGeometryOffset(cache.placement, currentPlacement) + walkingOffset);
+		BeginRenderAutomapOverlayCapture();
+		DrawAutomapOverlayPlayerArrows(out);
+		SetSdlGpuPaletteCompositorAutomapPlayerOverlay(EndRenderAutomapOverlayCapture());
+		DrawOrRestoreAutomapText(out);
+		return;
+	}
+
+	BeginRenderAutomapOverlayCapture();
+	if (cacheAllowed) {
+		const AutomapOverlayGeometryPlacement cachedPlacement = GetAutomapOverlayGeometryPlacement(AutomapOverlayCachePaddingCells);
+		const int captureMargin = std::max(128, AmOffset(AmWidthOffset::DoubleTileRight, AmHeightOffset::None).deltaX * AutomapOverlayCachePaddingCells + 64);
+		Surface captureOut = out;
+		captureOut.region.w += captureMargin * 2;
+		captureOut.region.h += captureMargin * 2;
+		AutomapOverlayGeometryPlacement expandedPlacement = cachedPlacement;
+		expandedPlacement.screen += Displacement { captureMargin, captureMargin };
+		DrawAutomapOverlayGeometry(captureOut, expandedPlacement);
+		cache.placement = expandedPlacement;
+	} else {
+		DrawAutomap(out);
+	}
+	const RenderAutomapOverlayView overlay = EndRenderAutomapOverlayCapture();
+	if (cacheAllowed) {
+		cache.rects.clear();
+		if (overlay.rects != nullptr && overlay.rectCount != 0)
+			cache.rects.assign(overlay.rects, overlay.rects + overlay.rectCount);
+		cache.version = overlay.version;
+		cache.key = cacheKey;
+		cache.valid = true;
+	} else {
+		cache.valid = false;
+		cache.rects.clear();
+	}
+	SetSdlGpuPaletteCompositorAutomapOverlay(overlay);
+	SetSdlGpuPaletteCompositorAutomapOverlayOffset(cacheAllowed ? GetAutomapOverlayGeometryOffset(cache.placement, currentPlacement) + walkingOffset : Displacement {});
+	if (cacheAllowed) {
+		BeginRenderAutomapOverlayCapture();
+		DrawAutomapOverlayPlayerArrows(out);
+		SetSdlGpuPaletteCompositorAutomapPlayerOverlay(EndRenderAutomapOverlayCapture());
+		DrawOrRestoreAutomapText(out);
+	} else {
+		SetSdlGpuPaletteCompositorAutomapPlayerOverlay({});
+	}
+}
+
+[[nodiscard]] bool SubmitGpuCursorOverlay(const Rectangle rect, const Point cursPosition, const Size cursSize)
+{
+	static constexpr uint8_t TransparentColor = 1;
+	struct CursorOverlayCache {
+		int cursId = CURSOR_NONE;
+		Size size {};
+		Displacement localCursorPosition {};
+		uint64_t paletteVersion = 0;
+		bool holdingItem = false;
+		bool heldItemUsable = false;
+		uint64_t version = 0;
+		std::vector<uint8_t> rgba;
+	};
+	static CursorOverlayCache Cache;
+
+	if (rect.size.width <= 0 || rect.size.height <= 0)
+		return false;
+
+	const Displacement localCursorPosition = cursPosition - rect.position + Displacement { 0, cursSize.height - 1 };
+	const bool holdingItem = !MyPlayer->HoldItem.isEmpty();
+	const bool heldItemUsable = !holdingItem || MyPlayer->HoldItem._iStatFlag;
+	const uint64_t paletteVersion = SystemPaletteVersion();
+	const bool cacheValid = Cache.cursId == pcurs
+	    && Cache.size == rect.size
+	    && Cache.localCursorPosition.deltaX == localCursorPosition.deltaX
+	    && Cache.localCursorPosition.deltaY == localCursorPosition.deltaY
+	    && Cache.paletteVersion == paletteVersion
+	    && Cache.holdingItem == holdingItem
+	    && Cache.heldItemUsable == heldItemUsable
+	    && !Cache.rgba.empty();
+
+	if (!cacheValid) {
+		Cache.cursId = pcurs;
+		Cache.size = rect.size;
+		Cache.localCursorPosition = localCursorPosition;
+		Cache.paletteVersion = paletteVersion;
+		Cache.holdingItem = holdingItem;
+		Cache.heldItemUsable = heldItemUsable;
+		Cache.version++;
+
+		const OwnedSurface cursorSurface { rect.size };
+		if (!SDL_FillSurfaceRect(cursorSurface.surface, nullptr, TransparentColor)) {
+			Log("Could not clear GPU cursor overlay surface: {}", SDL_GetError());
+			return false;
+		}
+
+		DrawSoftwareCursor(cursorSurface, Point { localCursorPosition }, pcurs);
+
+		const size_t rowBytes = static_cast<size_t>(rect.size.width) * 4;
+		Cache.rgba.resize(rowBytes * static_cast<size_t>(rect.size.height));
+		for (int y = 0; y < rect.size.height; y++) {
+			const uint8_t *src = cursorSurface.at(0, y);
+			uint8_t *dst = Cache.rgba.data() + static_cast<size_t>(y) * rowBytes;
+			for (int x = 0; x < rect.size.width; x++) {
+				const uint8_t colorIndex = src[x];
+				if (colorIndex == TransparentColor) {
+					dst[x * 4 + 0] = 0;
+					dst[x * 4 + 1] = 0;
+					dst[x * 4 + 2] = 0;
+					dst[x * 4 + 3] = 0;
+					continue;
+				}
+				const SDL_Color &color = system_palette[colorIndex];
+				dst[x * 4 + 0] = color.r;
+				dst[x * 4 + 1] = color.g;
+				dst[x * 4 + 2] = color.b;
+				dst[x * 4 + 3] = SDL_ALPHA_OPAQUE;
+			}
+		}
+	}
+
+	const size_t rowBytes = static_cast<size_t>(rect.size.width) * 4;
+
+	SetSdlGpuPaletteCompositorCursorOverlay({
+	    Cache.rgba.data(),
+	    rect.size,
+	    static_cast<int>(rowBytes),
+	    rect.position,
+	    Cache.version,
+	    true,
+	});
+	return true;
+}
+
 /**
  * @brief Blit CL2 sprite, and apply lighting, to the given buffer at the given coordinates
  * @param out Output buffer
@@ -364,6 +1130,12 @@ bool ShouldShowCursor()
  */
 inline void ClxDrawLight(const Surface &out, Point position, ClxSprite clx, int lightTableIndex)
 {
+	if (AcceleratedClassicLightingEnabledForWorld()) {
+		RenderClassicLightScope classicLight(static_cast<uint8_t>(std::clamp(lightTableIndex, 0, static_cast<int>(LightsMax))));
+		ClxDraw(out, position, clx);
+		return;
+	}
+
 	if (lightTableIndex != 0) {
 		ClxDrawTRN(out, position, clx, LightTables[lightTableIndex].data());
 	} else {
@@ -379,6 +1151,12 @@ inline void ClxDrawLight(const Surface &out, Point position, ClxSprite clx, int 
  */
 inline void ClxDrawLightBlended(const Surface &out, Point position, ClxSprite clx, int lightTableIndex)
 {
+	if (AcceleratedClassicLightingEnabledForWorld()) {
+		RenderClassicLightScope classicLight(static_cast<uint8_t>(std::clamp(lightTableIndex, 0, static_cast<int>(LightsMax))));
+		ClxDrawBlended(out, position, clx);
+		return;
+	}
+
 	if (lightTableIndex != 0) {
 		ClxDrawBlendedTRN(out, position, clx, LightTables[lightTableIndex].data());
 	} else {
@@ -392,19 +1170,23 @@ inline void ClxDrawLightBlended(const Surface &out, Point position, ClxSprite cl
 void DrawCursor(const Surface &out)
 {
 	DrawnCursor &cursor = GetDrawnCursor();
+	const bool useGpuCursorOverlay = GpuCursorOverlayEnabledForFrame();
 	if (IsHardwareCursor()) {
 		SetHardwareCursorVisible(ShouldShowCursor());
+		ClearSdlGpuPaletteCompositorCursorOverlay();
 		cursor.rect.size = { 0, 0 };
 		return;
 	}
 
 	if (pcurs <= CURSOR_NONE || !ShouldShowCursor()) {
+		ClearSdlGpuPaletteCompositorCursorOverlay();
 		cursor.rect.size = { 0, 0 };
 		return;
 	}
 
 	const Size cursSize = GetInvItemSize(pcurs);
 	if (cursSize.width == 0 || cursSize.height == 0) {
+		ClearSdlGpuPaletteCompositorCursorOverlay();
 		cursor.rect.size = { 0, 0 };
 		return;
 	}
@@ -435,8 +1217,21 @@ void DrawCursor(const Surface &out)
 	rect.size.height = cursSize.height + 2 * outlineWidth;
 	Clip(rect.position.y, rect.size.height, out.h());
 
-	if (rect.size.width == 0 || rect.size.height == 0)
+	if (rect.size.width == 0 || rect.size.height == 0) {
+		ClearSdlGpuPaletteCompositorCursorOverlay();
 		return;
+	}
+
+	if (useGpuCursorOverlay) {
+		if (SubmitGpuCursorOverlay(rect, cursPosition, cursSize)) {
+			cursor.rect.size = { 0, 0 };
+			cursor.behindLayerBufferValid = false;
+			return;
+		}
+		ClearSdlGpuPaletteCompositorCursorOverlay();
+	} else {
+		ClearSdlGpuPaletteCompositorCursorOverlay();
+	}
 
 	BlitCursor(cursor.behindBuffer, rect.size.width, &out[rect.position], out.pitch(), rect.size.width, rect.size.height);
 	cursor.behindLayerBufferValid = SaveRenderLayerMapRegion(rect, cursor.behindLayerBuffer, rect.size.width);
@@ -647,17 +1442,27 @@ void DrawObject(const Surface &out, const Object &objectToDraw, Point tilePositi
 	const ClxSprite sprite = objectToDraw.currentSprite();
 
 	const Point screenPosition = targetBufferPosition + objectToDraw.getRenderingOffset(sprite, tilePosition);
-	RenderWorldMaskScope worldMask(RenderWorldMaterial::Object, ReceiverOccluder());
+	const bool selfLitSource = AcceleratedClassicLightingEnabledForWorld() && ObjectEmitsClassicLight(objectToDraw);
+	const uint8_t worldMaskFlags = selfLitSource ? (ReceiverOccluder() | RenderWorldMaskEmissive) : ReceiverOccluder();
+	RenderWorldMaskScope worldMask(RenderWorldMaterial::Object, worldMaskFlags);
 	RecordWorldProxyPrimitive(RenderWorldProxyPrimitive::ObjectBlocker, SpriteProxyBounds(screenPosition, sprite));
 
-	if (&objectToDraw == ObjectUnderCursor) {
-		ClxDrawOutlineSkipColorZero(out, OutlineColorsObject, screenPosition, sprite);
+	const auto drawObject = [&]() {
+		if (&objectToDraw == ObjectUnderCursor) {
+			ClxDrawOutlineSkipColorZero(out, OutlineColorsObject, screenPosition, sprite);
+		}
+		if (objectToDraw.applyLighting) {
+			ClxDrawLight(out, screenPosition, sprite, lightTableIndex);
+		} else {
+			ClxDraw(out, screenPosition, sprite);
+		}
+	};
+	if (selfLitSource) {
+		RenderLayerScope renderLayer(RenderLayer::WorldOverlay);
+		drawObject();
+		return;
 	}
-	if (objectToDraw.applyLighting) {
-		ClxDrawLight(out, screenPosition, sprite, lightTableIndex);
-	} else {
-		ClxDraw(out, screenPosition, sprite);
-	}
+	drawObject();
 }
 
 static void DrawDungeon(const Surface & /*out*/, Point /*tilePosition*/, Point /*targetBufferPosition*/);
@@ -673,7 +1478,8 @@ void DrawCell(const Surface &out, Point tilePosition, Point targetBufferPosition
 	const uint16_t levelPieceId = dPiece[tilePosition.x][tilePosition.y];
 	const MICROS *pMap = &DPieceMicros[levelPieceId];
 
-	const uint8_t *tbl = LightTables[lightTableIndex].data();
+	RenderClassicLightScope classicLight(static_cast<uint8_t>(std::clamp(lightTableIndex, 0, static_cast<int>(LightsMax))));
+	const uint8_t *tbl = WorldLightTableForDraw(lightTableIndex);
 	const uint8_t *foliageTbl = tbl;
 #ifdef _DEBUG
 	int walkpathIdx = -1;
@@ -808,7 +1614,8 @@ void DrawFloorTile(const Surface &out, Point tilePosition, Point targetBufferPos
 {
 	const int lightTableIndex = dLight[tilePosition.x][tilePosition.y];
 
-	const uint8_t *tbl = LightTables[lightTableIndex].data();
+	RenderClassicLightScope classicLight(static_cast<uint8_t>(std::clamp(lightTableIndex, 0, static_cast<int>(LightsMax))));
+	const uint8_t *tbl = WorldLightTableForDraw(lightTableIndex);
 #ifdef _DEBUG
 	if (DebugPath && MyPlayer->GetPositionPathIndex(tilePosition) != -1)
 		tbl = GetPauseTRN();
@@ -1499,15 +2306,25 @@ void DrawView(const Surface &out, Point startPosition)
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::WorldSetup);
 		CalcFirstTilePosition(startPosition, offset);
+		SetRenderSmoothLightSources({});
 	}
 	DrawGame(out, startPosition, offset);
+	SubmitAcceleratedClassicLightGrid(startPosition, offset);
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::WorldOverlay);
-		RenderLayerScope renderLayer(RenderLayer::WorldOverlay, { { 0, 0 }, { out.w(), gnViewportHeight } });
+		RenderLayerScope renderLayer(RenderLayer::WorldOverlay);
+		const Surface viewportOut = out.subregionY(0, gnViewportHeight);
 		if (AutomapActive) {
-			DrawAutomap(out.subregionY(0, gnViewportHeight));
+			if (GpuAutomapOverlayEnabledForFrame()) {
+				SubmitGpuAutomapOverlay(viewportOut);
+			} else {
+				ClearSdlGpuPaletteCompositorAutomapOverlay();
+				DrawAutomap(viewportOut);
+			}
+		} else {
+			ClearSdlGpuPaletteCompositorAutomapOverlay();
 		}
-		DrawCombatIndicator(out.subregionY(0, gnViewportHeight));
+		DrawCombatIndicator(viewportOut);
 	}
 #ifdef _DEBUG
 	{
@@ -1597,7 +2414,10 @@ void DrawView(const Surface &out, Point startPosition)
 		if (IsPlayerInStore() && !qtextflag)
 			DrawSText(out);
 		if (invflag) {
-			DrawInv(out);
+			static RetainedSidePanelCache inventoryPanelCache;
+			DrawOrRestoreRetainedSidePanel(out, inventoryPanelCache, GetInventoryPanelRect(), RetainedSidePanelKind::Inventory, InventoryPanelFingerprint(), [](const Surface &out) {
+				DrawInv(out);
+			});
 		} else if (SpellbookFlag) {
 			DrawSpellBook(out);
 		}
@@ -1607,7 +2427,10 @@ void DrawView(const Surface &out, Point startPosition)
 		DrawLevelButton(out);
 
 		if (CharFlag) {
-			DrawChr(out);
+			static RetainedSidePanelCache characterPanelCache;
+			DrawOrRestoreRetainedSidePanel(out, characterPanelCache, GetLeftPanel(), RetainedSidePanelKind::Character, CharacterPanelFingerprint(), [](const Surface &out) {
+				DrawChr(out);
+			});
 		} else if (QuestLogIsOpen) {
 			DrawQuestLog(out);
 		} else if (IsStashOpen) {
@@ -1661,11 +2484,14 @@ void DrawView(const Surface &out, Point startPosition)
  */
 void DrawFPS(const Surface &out)
 {
-	RenderLayerScope renderLayer(RenderLayer::Debug, { { 8, 8 }, { 120, 16 } });
+	const Rectangle bounds { { 8, 8 }, { 120, 16 } };
+	RenderLayerScope renderLayer(RenderLayer::Debug, bounds);
+	static RetainedSparseOverlayCache cache;
 	static int framesSinceLastUpdate = 0;
 	static std::string_view formatted {};
 
 	if (!frameflag || !gbActive) {
+		cache.valid = false;
 		return;
 	}
 
@@ -1684,7 +2510,9 @@ void DrawFPS(const Surface &out)
 		    : BufCopy(buf, fps / FpsPow10, ".", fps % FpsPow10, " FPS");
 		formatted = { buf, static_cast<std::string_view::size_type>(end - buf) };
 	};
-	DrawString(out, formatted, Point { 8, 8 }, { .flags = UiFlags::ColorRed });
+	DrawOrRestoreRetainedOverlay(out, cache, bounds, HashString(0x4C3B2A1908070605ULL, formatted), [](const Surface &out) {
+		DrawString(out, formatted, Point { 8, 8 }, { .flags = UiFlags::ColorRed });
+	});
 }
 
 [[nodiscard]] std::string_view RenderLayerDiagnosticModeLabel(const RenderLayerDiagnosticMode mode)
@@ -1802,13 +2630,36 @@ void AppendWorldProxyDiagnosticLegend(std::vector<std::string> &lines, RenderWor
 	}
 }
 
+void AppendLightShadowDiagnosticLegend(std::vector<std::string> &lines, RenderLightShadowDiagnosticMode mode, bool acceleratedClassicLightingActive)
+{
+	switch (mode) {
+	case RenderLightShadowDiagnosticMode::FinalLitOutput:
+		lines.emplace_back(acceleratedClassicLightingActive ? "LIGHT: FINAL SMOOTH CLASSIC WORLD LIGHTING" : "LIGHT: FINAL DEVELOPMENT LIGHT/SHADOW OUTPUT");
+		break;
+	case RenderLightShadowDiagnosticMode::LightRgb:
+		lines.emplace_back(acceleratedClassicLightingActive ? "LIGHT RGB: WHITE FULL LIGHT, BLACK DARK" : "LIGHT RGB: DEVELOPMENT LIGHT BUFFER");
+		break;
+	case RenderLightShadowDiagnosticMode::ShadowAlpha:
+		lines.emplace_back("SHADOW: WHITE FULL SHADOW, BLACK CLEAR");
+		break;
+	case RenderLightShadowDiagnosticMode::Off:
+		break;
+	}
+}
+
 void DrawRenderDiagnosticStatus(const Surface &out)
 {
 	const auto &experimental = GetOptions().Experimental;
+	static RetainedSparseOverlayCache cache;
 	std::vector<std::string> lines;
+	const bool acceleratedClassicLightingActive = AcceleratedClassicLightingEnabledForWorld();
 
 	if (*experimental.renderFrameCompositorDiagnosticTransform)
 		lines.emplace_back("RENDER DIAG: COMPOSITOR RGB TRANSFORM");
+
+	if (*experimental.renderAcceleratedClassicLighting) {
+		AppendAcceleratedClassicLightingStatus(lines);
+	}
 
 	const RenderLayerDiagnosticMode layerMode = *experimental.renderLayerDiagnosticMode;
 	if (layerMode != RenderLayerDiagnosticMode::Off) {
@@ -1831,20 +2682,29 @@ void DrawRenderDiagnosticStatus(const Surface &out)
 
 	const RenderLightShadowDiagnosticMode lightShadowMode = *experimental.renderLightShadowDiagnosticMode;
 	if (lightShadowMode != RenderLightShadowDiagnosticMode::Off) {
-		const bool activeBackend = *experimental.renderFrameCompositor && *experimental.renderFrameCompositorBackend == RenderFrameCompositorBackend::SdlGpuPalette;
+		const bool activeBackend = AcceleratedFrameCompositorActiveApi() == AcceleratedCompositorApi::SdlGpu;
 		lines.emplace_back(StrCat("RENDER DIAG: LIGHT/SHADOW ", RenderLightShadowDiagnosticModeName(lightShadowMode),
 		    activeBackend ? "" : " (SDL_GPU BACKEND REQUIRED)"));
+		AppendLightShadowDiagnosticLegend(lines, lightShadowMode, acceleratedClassicLightingActive);
 	}
 
-	if (lines.empty())
+	if (lines.empty()) {
+		cache.valid = false;
 		return;
+	}
 
 	const int lineHeight = 12;
 	const int yStart = *GetOptions().Graphics.showFPS ? 24 : 8;
-	RenderLayerScope renderLayer(RenderLayer::Debug, { { 8, yStart }, { 620, static_cast<int>(lines.size()) * lineHeight } });
-	for (size_t i = 0; i < lines.size(); i++) {
-		DrawString(out, lines[i], Point { 8, yStart + static_cast<int>(i) * lineHeight }, { .flags = UiFlags::ColorWhite | UiFlags::Outlined });
-	}
+	const Rectangle bounds { { 8, yStart }, { std::min(620, std::max(0, out.w() - 8)), std::min(std::max(0, out.h() - yStart), static_cast<int>(lines.size()) * lineHeight + 12) } };
+	uint64_t fingerprint = HashCombine(0xA949B21C87F2436DULL, yStart);
+	for (const std::string &line : lines)
+		fingerprint = HashString(fingerprint, line);
+	RenderLayerScope renderLayer(RenderLayer::Debug, bounds);
+	DrawOrRestoreRetainedOverlay(out, cache, bounds, fingerprint, [&lines, yStart](const Surface &out) {
+		for (size_t i = 0; i < lines.size(); i++) {
+			DrawString(out, lines[i], Point { 8, yStart + static_cast<int>(i) * lineHeight }, { .flags = UiFlags::ColorWhite | UiFlags::Outlined });
+		}
+	});
 }
 
 /**
@@ -2190,13 +3050,14 @@ void scrollrt_draw_game_screen()
 	const Surface &out = GlobalBackBuffer();
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::LayerCaptureSetup);
-		BeginRenderLayerFrame(out, RenderLayerCaptureNeededForFrameComposition(), RenderWorldMaskCaptureNeededForFrameComposition(), RenderWorldProxyCaptureNeededForFrameComposition(), *GetOptions().Experimental.renderWorldProxyActorOccluders);
+		BeginRenderLayerFrame(out, RenderLayerCaptureNeededForFrameComposition(), RenderWorldMaskCaptureNeededForFrameComposition(), RenderWorldProxyCaptureNeededForFrameComposition(), *GetOptions().Experimental.renderWorldProxyActorOccluders, RenderClassicLightCaptureNeededForFrameComposition(), RenderClassicLightGeneratedIntensityMapNeededForFrameComposition(), RenderClassicLightGridNeededForFrameComposition(), RenderLayerCaptureDefaultsToWorldForFrameComposition());
 	}
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::CursorUndraw);
 		RenderLayerCaptureSuspension renderLayerCaptureSuspension;
 		UndrawCursor(out);
 	}
+	MarkPersistentInterfaceLayerOwnership();
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::CursorDraw);
 		DrawCursor(out);
@@ -2253,7 +3114,7 @@ void DrawAndBlit()
 	BeginRenderPerfFrame(*GetOptions().Experimental.renderPerformanceStats);
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::LayerCaptureSetup);
-		BeginRenderLayerFrame(out, RenderLayerCaptureNeededForFrameComposition(), RenderWorldMaskCaptureNeededForFrameComposition(), RenderWorldProxyCaptureNeededForFrameComposition(), *GetOptions().Experimental.renderWorldProxyActorOccluders);
+		BeginRenderLayerFrame(out, RenderLayerCaptureNeededForFrameComposition(), RenderWorldMaskCaptureNeededForFrameComposition(), RenderWorldProxyCaptureNeededForFrameComposition(), *GetOptions().Experimental.renderWorldProxyActorOccluders, RenderClassicLightCaptureNeededForFrameComposition(), RenderClassicLightGeneratedIntensityMapNeededForFrameComposition(), RenderClassicLightGridNeededForFrameComposition(), RenderLayerCaptureDefaultsToWorldForFrameComposition());
 	}
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::CursorUndraw);
@@ -2293,17 +3154,18 @@ void DrawAndBlit()
 		DrawXPBar(out);
 		if (*GetOptions().Gameplay.showHealthValues)
 			DrawFlaskValues(out, { mainPanel.position.x + 134, mainPanel.position.y + 28 }, MyPlayer->_pHitPoints >> 6, MyPlayer->_pMaxHP >> 6);
-		if (*GetOptions().Gameplay.showManaValues)
+		if (*GetOptions().Gameplay.showManaValues) {
 			DrawFlaskValues(out, { mainPanel.position.x + mainPanel.size.width - 138, mainPanel.position.y + 28 },
 			    (HasAnyOf(InspectPlayer->_pIFlags, ItemSpecialEffect::NoMana) || MyPlayer->hasNoMana()) ? 0 : MyPlayer->_pMana >> 6,
 			    HasAnyOf(InspectPlayer->_pIFlags, ItemSpecialEffect::NoMana) ? 0 : MyPlayer->_pMaxMana >> 6);
+		}
 		if (*GetOptions().Gameplay.floatingInfoBox)
 			DrawFloatingInfoBox(out);
-
 		if (*GetOptions().Gameplay.showMultiplayerPartyInfo && PartySidePanelOpen)
 			DrawPartyMemberInfoPanel(out);
 	}
 
+	MarkPersistentInterfaceLayerOwnership();
 	{
 		RenderPerfScope renderPerfScope(RenderPerfPhase::CursorDraw);
 		DrawCursor(out);
