@@ -96,8 +96,16 @@ TEST_F(RenderPerfTest, RecordsCompositionAndLayerCaptureStats)
 	composition.composedPixelArea = 12;
 	composition.selectedThreadCount = 3;
 	composition.parallelCompositionUsed = true;
+	composition.worldRoleDirtyRectCount = 1;
+	composition.interfaceRoleDirtyRectCount = 2;
+	composition.cursorRoleDirtyRectCount = 1;
+	composition.worldRoleDirtyPixelArea = 9;
+	composition.interfaceRoleDirtyPixelArea = 7;
+	composition.cursorRoleDirtyPixelArea = 4;
 	SetRenderPerfCompositionStats(composition);
 	SetRenderPerfLayerCaptureStats(4, 40);
+	SetRenderPerfWorldMaskStats(3, 30);
+	SetRenderPerfWorldProxyStats(2, 1, 96);
 
 	EndRenderPerfFrame();
 
@@ -106,6 +114,11 @@ TEST_F(RenderPerfTest, RecordsCompositionAndLayerCaptureStats)
 	EXPECT_EQ(frame.composition.fullFrameReason, CompositionFullFrameReason::PaletteChanged);
 	EXPECT_EQ(frame.layerStampedSpanCount, 4);
 	EXPECT_EQ(frame.layerStampedPixelCount, 40);
+	EXPECT_EQ(frame.worldMaskStampedSpanCount, 3);
+	EXPECT_EQ(frame.worldMaskStampedPixelCount, 30);
+	EXPECT_EQ(frame.worldProxyPrimitiveCount, 2);
+	EXPECT_EQ(frame.worldProxyActorPrimitiveCount, 1);
+	EXPECT_EQ(frame.worldProxyPixelCount, 96);
 
 	const RenderPerfRollingStats &rolling = GetRenderPerfRollingStats();
 	EXPECT_EQ(rolling.fullFrameCompositionCount, 1);
@@ -117,8 +130,19 @@ TEST_F(RenderPerfTest, RecordsCompositionAndLayerCaptureStats)
 	EXPECT_EQ(rolling.normalizedDirtyArea, 12);
 	EXPECT_EQ(rolling.composedPixelArea, 12);
 	EXPECT_EQ(rolling.maxSelectedThreadCount, 3);
+	EXPECT_EQ(rolling.worldRoleDirtyRectCount, 1);
+	EXPECT_EQ(rolling.interfaceRoleDirtyRectCount, 2);
+	EXPECT_EQ(rolling.cursorRoleDirtyRectCount, 1);
+	EXPECT_EQ(rolling.worldRoleDirtyPixelArea, 9);
+	EXPECT_EQ(rolling.interfaceRoleDirtyPixelArea, 7);
+	EXPECT_EQ(rolling.cursorRoleDirtyPixelArea, 4);
 	EXPECT_EQ(rolling.layerStampedSpanCount, 4);
 	EXPECT_EQ(rolling.layerStampedPixelCount, 40);
+	EXPECT_EQ(rolling.worldMaskStampedSpanCount, 3);
+	EXPECT_EQ(rolling.worldMaskStampedPixelCount, 30);
+	EXPECT_EQ(rolling.worldProxyPrimitiveCount, 2);
+	EXPECT_EQ(rolling.worldProxyActorPrimitiveCount, 1);
+	EXPECT_EQ(rolling.worldProxyPixelCount, 96);
 }
 
 TEST_F(RenderPerfTest, ResetsRollingStatsAfterReportWindow)

@@ -10,12 +10,38 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "engine/point.hpp"
+#include "engine/rectangle.hpp"
 #include "engine/surface.hpp"
 
 namespace devilution {
+
+struct RenderAutomapOverlayRect {
+	Rectangle rect;
+	std::uint8_t colorIndex = 0;
+	std::uint8_t alpha = 255;
+};
+
+struct RenderAutomapOverlayView {
+	const RenderAutomapOverlayRect *rects = nullptr;
+	std::size_t rectCount = 0;
+	std::uint64_t version = 0;
+	bool active = false;
+};
+
+void BeginRenderAutomapOverlayCapture();
+[[nodiscard]] RenderAutomapOverlayView EndRenderAutomapOverlayCapture();
+void ClearRenderAutomapOverlayCapture();
+[[nodiscard]] bool RenderAutomapOverlayCaptureActive();
+void BeginRenderAutomapOverlaySubCapture();
+[[nodiscard]] RenderAutomapOverlayView EndRenderAutomapOverlaySubCapture();
+[[nodiscard]] std::size_t RenderAutomapOverlayCaptureRectCount();
+[[nodiscard]] const RenderAutomapOverlayRect *RenderAutomapOverlayCaptureRects();
+void ResizeRenderAutomapOverlayCapture(std::size_t size);
+void AppendRenderAutomapOverlayRect(const Surface &out, RenderAutomapOverlayRect rect);
 
 void DrawMapLineNS(const Surface &out, Point from, int height, std::uint8_t colorIndex);
 void DrawMapLineWE(const Surface &out, Point from, int height, std::uint8_t colorIndex);

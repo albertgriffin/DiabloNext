@@ -38,6 +38,7 @@ enum class AcceleratedCompositorApi : uint8_t {
 [[nodiscard]] std::string_view AcceleratedCompositorApiName(AcceleratedCompositorApi api);
 [[nodiscard]] AcceleratedCompositorApi AcceleratedFrameCompositorRequestedApi();
 [[nodiscard]] AcceleratedCompositorApi AcceleratedFrameCompositorActiveApi();
+[[nodiscard]] bool AcceleratedFrameCompositorRequestedBackendBuildAvailable();
 [[nodiscard]] bool AcceleratedFrameCompositorRequested();
 [[nodiscard]] bool AcceleratedFrameCompositorWindowRequested();
 [[nodiscard]] AcceleratedCompositorWindowFlags ConfigureAcceleratedFrameCompositorWindow();

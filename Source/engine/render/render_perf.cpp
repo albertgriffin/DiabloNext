@@ -88,9 +88,40 @@ void AccumulateFrame()
 	RollingStats.submittedDirtyArea += composition.submittedDirtyArea;
 	RollingStats.normalizedDirtyArea += composition.normalizedDirtyArea;
 	RollingStats.composedPixelArea += composition.composedPixelArea;
+	RollingStats.uploadBytes += composition.uploadBytes;
+	RollingStats.uploadedRectCount += composition.uploadedRectCount;
+	RollingStats.skippedUploadCount += composition.skippedUploadCount;
+	RollingStats.fullUploadCount += composition.fullUploadCount;
+	RollingStats.failedUploadCount += composition.failedUploadCount;
+	if (composition.uploadFallbackReason != CompositionUploadFallbackReason::None)
+		RollingStats.lastUploadFallbackReason = composition.uploadFallbackReason;
+	RollingStats.backendNoFrameProducedCount += composition.backendNoFrameProducedCount;
+	RollingStats.backendUpdatedOutputSurfaceCount += composition.backendUpdatedOutputSurfaceCount;
+	RollingStats.backendPreparedDirectPresentationCount += composition.backendPreparedDirectPresentationCount;
+	RollingStats.backendRetainedDirectPresentationCount += composition.backendRetainedDirectPresentationCount;
+	RollingStats.worldRoleDirtyRectCount += composition.worldRoleDirtyRectCount;
+	RollingStats.worldOverlayRoleDirtyRectCount += composition.worldOverlayRoleDirtyRectCount;
+	RollingStats.interfaceRoleDirtyRectCount += composition.interfaceRoleDirtyRectCount;
+	RollingStats.cursorRoleDirtyRectCount += composition.cursorRoleDirtyRectCount;
+	RollingStats.diagnosticOverlayRoleDirtyRectCount += composition.diagnosticOverlayRoleDirtyRectCount;
+	RollingStats.worldRoleDirtyPixelArea += composition.worldRoleDirtyPixelArea;
+	RollingStats.worldOverlayRoleDirtyPixelArea += composition.worldOverlayRoleDirtyPixelArea;
+	RollingStats.interfaceRoleDirtyPixelArea += composition.interfaceRoleDirtyPixelArea;
+	RollingStats.cursorRoleDirtyPixelArea += composition.cursorRoleDirtyPixelArea;
+	RollingStats.diagnosticOverlayRoleDirtyPixelArea += composition.diagnosticOverlayRoleDirtyPixelArea;
 	RollingStats.maxSelectedThreadCount = std::max(RollingStats.maxSelectedThreadCount, composition.selectedThreadCount);
 	RollingStats.layerStampedSpanCount += CurrentFrame.layerStampedSpanCount;
 	RollingStats.layerStampedPixelCount += CurrentFrame.layerStampedPixelCount;
+	RollingStats.worldMaskStampedSpanCount += CurrentFrame.worldMaskStampedSpanCount;
+	RollingStats.worldMaskStampedPixelCount += CurrentFrame.worldMaskStampedPixelCount;
+	RollingStats.worldProxyPrimitiveCount += CurrentFrame.worldProxyPrimitiveCount;
+	RollingStats.worldProxyActorPrimitiveCount += CurrentFrame.worldProxyActorPrimitiveCount;
+	RollingStats.worldProxyPixelCount += CurrentFrame.worldProxyPixelCount;
+	RollingStats.automapOverlayRectCount += CurrentFrame.automapOverlayRectCount;
+	RollingStats.automapOverlayVertexCount += CurrentFrame.automapOverlayVertexCount;
+	RollingStats.automapOverlayUploadBytes += CurrentFrame.automapOverlayUploadBytes;
+	RollingStats.automapOverlayUploadCount += CurrentFrame.automapOverlayUploadCount;
+	RollingStats.automapOverlaySkippedUploadCount += CurrentFrame.automapOverlaySkippedUploadCount;
 }
 
 void LogRollingStats()
@@ -99,7 +130,7 @@ void LogRollingStats()
 	if (frames == 0)
 		return;
 
-	Log("RenderPerf frames={} avg_us cursor_undraw={} world={} interface={} cursor={} debug={} dirty_blit={} compose={} present={} world_detail setup={} lightmap={} floor={} tiles={} oob={} zoom={} overlay={} debug={} view_ui={} layer_setup={} tile_detail cell={} missile={} corpse={} object={} item={} player={} monster={} special={} dirty_rects submitted={} normalized={} composed={} dirty_area submitted={} normalized={} composed={} full_frames={} last_full_reason={} parallel_frames={} max_threads={} layer_spans={} layer_pixels={}",
+	Log("RenderPerf frames={} avg_us cursor_undraw={} world={} interface={} cursor={} debug={} dirty_blit={} compose={} present={} world_detail setup={} lightmap={} floor={} tiles={} oob={} zoom={} overlay={} debug={} view_ui={} layer_setup={} proxy={} tile_detail cell={} missile={} corpse={} object={} item={} player={} monster={} special={} dirty_rects submitted={} normalized={} composed={} dirty_area submitted={} normalized={} composed={} full_frames={} last_full_reason={} parallel_frames={} max_threads={} upload bytes={} rects={} skipped={} full={} failed={} last_upload_fallback={} backend_results no_frame={} cpu_surface={} direct_prepared={} direct_retained={} role_rects world={} world_overlay={} interface={} cursor={} diagnostic={} role_area world={} world_overlay={} interface={} cursor={} diagnostic={} layer_spans={} layer_pixels={} world_mask_spans={} world_mask_pixels={} world_proxy_primitives={} world_proxy_actor_primitives={} world_proxy_pixels={} automap_overlay rects={} vertices={} upload_bytes={} uploads={} skipped={}",
 	    frames,
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::CursorUndraw)], frames),
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::WorldDraw)], frames),
@@ -119,6 +150,7 @@ void LogRollingStats()
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::WorldDebugOverlay)], frames),
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::ViewInterfaceDraw)], frames),
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::LayerCaptureSetup)], frames),
+	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::WorldProxy)], frames),
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::WorldTileCell)], frames),
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::WorldTileMissile)], frames),
 	    Average(RollingStats.phaseUs[PhaseIndex(RenderPerfPhase::WorldTileCorpse)], frames),
@@ -137,8 +169,38 @@ void LogRollingStats()
 	    CompositionFullFrameReasonName(RollingStats.lastFullFrameReason),
 	    RollingStats.parallelCompositionCount,
 	    RollingStats.maxSelectedThreadCount,
+	    Average(RollingStats.uploadBytes, frames),
+	    Average(RollingStats.uploadedRectCount, frames),
+	    Average(RollingStats.skippedUploadCount, frames),
+	    Average(RollingStats.fullUploadCount, frames),
+	    Average(RollingStats.failedUploadCount, frames),
+	    CompositionUploadFallbackReasonName(RollingStats.lastUploadFallbackReason),
+	    RollingStats.backendNoFrameProducedCount,
+	    RollingStats.backendUpdatedOutputSurfaceCount,
+	    RollingStats.backendPreparedDirectPresentationCount,
+	    RollingStats.backendRetainedDirectPresentationCount,
+	    Average(RollingStats.worldRoleDirtyRectCount, frames),
+	    Average(RollingStats.worldOverlayRoleDirtyRectCount, frames),
+	    Average(RollingStats.interfaceRoleDirtyRectCount, frames),
+	    Average(RollingStats.cursorRoleDirtyRectCount, frames),
+	    Average(RollingStats.diagnosticOverlayRoleDirtyRectCount, frames),
+	    Average(RollingStats.worldRoleDirtyPixelArea, frames),
+	    Average(RollingStats.worldOverlayRoleDirtyPixelArea, frames),
+	    Average(RollingStats.interfaceRoleDirtyPixelArea, frames),
+	    Average(RollingStats.cursorRoleDirtyPixelArea, frames),
+	    Average(RollingStats.diagnosticOverlayRoleDirtyPixelArea, frames),
 	    Average(RollingStats.layerStampedSpanCount, frames),
-	    Average(RollingStats.layerStampedPixelCount, frames));
+	    Average(RollingStats.layerStampedPixelCount, frames),
+	    Average(RollingStats.worldMaskStampedSpanCount, frames),
+	    Average(RollingStats.worldMaskStampedPixelCount, frames),
+	    Average(RollingStats.worldProxyPrimitiveCount, frames),
+	    Average(RollingStats.worldProxyActorPrimitiveCount, frames),
+	    Average(RollingStats.worldProxyPixelCount, frames),
+	    Average(RollingStats.automapOverlayRectCount, frames),
+	    Average(RollingStats.automapOverlayVertexCount, frames),
+	    Average(RollingStats.automapOverlayUploadBytes, frames),
+	    RollingStats.automapOverlayUploadCount,
+	    RollingStats.automapOverlaySkippedUploadCount);
 }
 
 } // namespace
@@ -172,6 +234,43 @@ std::string_view CompositionFullFrameReasonName(const CompositionFullFrameReason
 		return "logical-size-changed";
 	case CompositionFullFrameReason::DirectPresentationUnavailable:
 		return "direct-presentation-unavailable";
+	case CompositionFullFrameReason::LightShadowDiagnosticRequested:
+		return "light-shadow-diagnostic-requested";
+	case CompositionFullFrameReason::WorldMaskDiagnosticModeChanged:
+		return "world-mask-diagnostic-mode-changed";
+	case CompositionFullFrameReason::WorldMaskDiagnosticsRequested:
+		return "world-mask-diagnostics-requested";
+	case CompositionFullFrameReason::WorldProxyDiagnosticModeChanged:
+		return "world-proxy-diagnostic-mode-changed";
+	case CompositionFullFrameReason::WorldProxyDiagnosticsRequested:
+		return "world-proxy-diagnostics-requested";
+	case CompositionFullFrameReason::ClassicLightMapChanged:
+		return "classic-light-map-changed";
+	}
+	return "unknown";
+}
+
+std::string_view CompositionUploadFallbackReasonName(const CompositionUploadFallbackReason reason)
+{
+	switch (reason) {
+	case CompositionUploadFallbackReason::None:
+		return "none";
+	case CompositionUploadFallbackReason::InvalidFrame:
+		return "invalid-frame";
+	case CompositionUploadFallbackReason::InvalidLightingInputs:
+		return "invalid-lighting-inputs";
+	case CompositionUploadFallbackReason::UploadSizeTooLarge:
+		return "upload-size-too-large";
+	case CompositionUploadFallbackReason::ResourceUnavailable:
+		return "resource-unavailable";
+	case CompositionUploadFallbackReason::TransferMapFailed:
+		return "transfer-map-failed";
+	case CompositionUploadFallbackReason::CommandBufferUnavailable:
+		return "command-buffer-unavailable";
+	case CompositionUploadFallbackReason::CopyPassUnavailable:
+		return "copy-pass-unavailable";
+	case CompositionUploadFallbackReason::SubmitFailed:
+		return "submit-failed";
 	}
 	return "unknown";
 }
@@ -242,6 +341,39 @@ void SetRenderPerfLayerCaptureStats(const uint64_t stampedSpanCount, const uint6
 
 	CurrentFrame.layerStampedSpanCount = stampedSpanCount;
 	CurrentFrame.layerStampedPixelCount = stampedPixelCount;
+}
+
+void SetRenderPerfWorldMaskStats(const uint64_t stampedSpanCount, const uint64_t stampedPixelCount)
+{
+	if (!Active)
+		return;
+
+	CurrentFrame.worldMaskStampedSpanCount = stampedSpanCount;
+	CurrentFrame.worldMaskStampedPixelCount = stampedPixelCount;
+}
+
+void SetRenderPerfWorldProxyStats(const uint64_t primitiveCount, const uint64_t actorPrimitiveCount, const uint64_t pixelCount)
+{
+	if (!Active)
+		return;
+
+	CurrentFrame.worldProxyPrimitiveCount = primitiveCount;
+	CurrentFrame.worldProxyActorPrimitiveCount = actorPrimitiveCount;
+	CurrentFrame.worldProxyPixelCount = pixelCount;
+}
+
+void AddRenderPerfAutomapOverlayStats(const uint64_t rectCount, const uint64_t vertexCount, const uint64_t uploadBytes, const bool uploaded, const bool skippedUpload)
+{
+	if (!Active)
+		return;
+
+	CurrentFrame.automapOverlayRectCount += rectCount;
+	CurrentFrame.automapOverlayVertexCount += vertexCount;
+	CurrentFrame.automapOverlayUploadBytes += uploadBytes;
+	if (uploaded)
+		CurrentFrame.automapOverlayUploadCount++;
+	if (skippedUpload)
+		CurrentFrame.automapOverlaySkippedUploadCount++;
 }
 
 RenderPerfScope::RenderPerfScope(const RenderPerfPhase phase)

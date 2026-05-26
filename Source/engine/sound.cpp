@@ -108,7 +108,7 @@ tl::expected<void, std::string> LoadAudioFile(const char *path, bool stream, Sou
 		}
 		const int error = result.SetChunk(waveFile, size, isMp3);
 		if (error != 0) {
-			return tl::make_unexpected(SDL_GetError());
+			return tl::make_unexpected(StrCat("Failed to decode audio file\n", foundPath, "\n", SDL_GetError(), "\n" __FILE__ ":", __LINE__));
 		}
 	}
 	return {};

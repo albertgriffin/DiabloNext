@@ -20,6 +20,7 @@ namespace {
 struct AcceleratedCompositorBackendDescriptor {
 	RenderFrameCompositorBackend backend;
 	AcceleratedCompositorApi api;
+	bool (*buildAvailable)();
 	bool (*requested)();
 	bool (*windowRequested)();
 	AcceleratedCompositorWindowFlags (*configureWindow)();
@@ -61,6 +62,7 @@ constexpr std::array<AcceleratedCompositorBackendDescriptor, 3> AcceleratedCompo
 	        AcceleratedCompositorApi::None,
 	        FalsePredicate,
 	        FalsePredicate,
+	        FalsePredicate,
 	        NoopConfigureWindow,
 	        NoopReinitialize,
 	        FalsePredicate,
@@ -70,6 +72,7 @@ constexpr std::array<AcceleratedCompositorBackendDescriptor, 3> AcceleratedCompo
 	    {
 	        RenderFrameCompositorBackend::OpenGlPalette,
 	        AcceleratedCompositorApi::OpenGl,
+	        OpenGlPaletteCompositorBuildAvailable,
 	        OpenGlPaletteCompositorRequested,
 	        OpenGlPaletteCompositorWindowRequested,
 	        ConfigureOpenGlPaletteCompositorWindow,
@@ -81,6 +84,7 @@ constexpr std::array<AcceleratedCompositorBackendDescriptor, 3> AcceleratedCompo
 	    {
 	        RenderFrameCompositorBackend::SdlGpuPalette,
 	        AcceleratedCompositorApi::SdlGpu,
+	        SdlGpuPaletteCompositorBuildAvailable,
 	        SdlGpuPaletteCompositorRequested,
 	        SdlGpuPaletteCompositorWindowRequested,
 	        ConfigureSdlGpuPaletteCompositorWindow,
@@ -135,6 +139,12 @@ AcceleratedCompositorApi AcceleratedFrameCompositorActiveApi()
 	if (descriptor == nullptr || !descriptor->active())
 		return AcceleratedCompositorApi::None;
 	return descriptor->api;
+}
+
+bool AcceleratedFrameCompositorRequestedBackendBuildAvailable()
+{
+	const AcceleratedCompositorBackendDescriptor *descriptor = RequestedAcceleratedCompositorBackend();
+	return descriptor != nullptr && descriptor->buildAvailable();
 }
 
 bool AcceleratedFrameCompositorRequested()

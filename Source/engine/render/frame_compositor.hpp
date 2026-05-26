@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -45,11 +46,61 @@ struct IndexBufferView {
 	int width = 0;
 	int height = 0;
 	int pitch = 0;
+	uint64_t version = 0;
 };
 
 struct DirtyRectList {
 	std::vector<Rectangle> rects;
 	bool fullFrame = false;
+};
+
+enum class CompositionAttachmentRole : uint8_t {
+	IndexedAlbedo,
+	Palette,
+	WorldIndex,
+	WorldOverlayIndex,
+	WorldMaterial,
+	WorldDepth,
+	WorldHeight,
+	WorldNormal,
+	WorldOccluder,
+	WorldReceiver,
+	LightAccumulation,
+	ShadowMask,
+	ParticleAccumulation,
+	InterfaceIndex,
+	CursorIndex,
+	Diagnostic,
+};
+
+enum class CompositionAttachmentFormat : uint8_t {
+	Unknown,
+	Index8,
+	PaletteRgba8,
+	Rgba8,
+	Alpha8,
+};
+
+struct CompositionAttachment {
+	CompositionAttachmentRole role = CompositionAttachmentRole::IndexedAlbedo;
+	CompositionAttachmentFormat format = CompositionAttachmentFormat::Unknown;
+	Size logicalSize;
+	int pitch = 0;
+	uint64_t version = 0;
+	DirtyRectList dirtyRects;
+	const uint8_t *cpuPixels = nullptr;
+};
+
+enum class CompositionAttachmentUploadAction : uint8_t {
+	Skip,
+	Full,
+	Partial,
+};
+
+struct CompositionAttachmentUploadPlan {
+	CompositionAttachmentUploadAction action = CompositionAttachmentUploadAction::Skip;
+	std::vector<Rectangle> rects;
+	uint64_t byteCount = 0;
 };
 
 enum class CompositionSurfaceRole : uint8_t {
@@ -83,6 +134,13 @@ struct CompositionFrame {
 	RenderLayerDiagnosticMode renderLayerDiagnosticMode = RenderLayerDiagnosticMode::Off;
 	RenderLayerMapView renderLayerMap;
 	CompositionSurfaceMetadata compositionSurfaceMetadata;
+	std::vector<CompositionAttachment> attachments;
+	RenderWorldMaskMapView worldMaskMap;
+	RenderWorldMaskDiagnosticMode renderWorldMaskDiagnosticMode = RenderWorldMaskDiagnosticMode::Off;
+	RenderWorldProxyMapView worldProxyMap;
+	RenderWorldProxyDiagnosticMode renderWorldProxyDiagnosticMode = RenderWorldProxyDiagnosticMode::Off;
+	RenderClassicLightMapView classicLightMap;
+	RenderSmoothLightSourceView smoothLightSources;
 };
 
 enum class FrameCompositorBackendResult : uint8_t {
@@ -103,12 +161,17 @@ public:
 	[[nodiscard]] virtual std::string_view Name() const = 0;
 	[[nodiscard]] virtual bool IsAvailable() const = 0;
 	[[nodiscard]] virtual bool CanRetainDirectPresentation() const { return false; }
+	[[nodiscard]] virtual bool CanConsumeClassicLightMapDirectly() const { return false; }
 	[[nodiscard]] virtual FrameCompositorBackendResult Compose(const CompositionFrame &frame, SDL_Surface &outputSurface, const std::vector<Rectangle> &rects, RenderPerfCompositionStats &stats) = 0;
 	virtual void Present() { }
 };
 
 [[nodiscard]] IndexBufferView MakeIndexBufferView(const SDL_Surface &surface);
 [[nodiscard]] PaletteSnapshot MakePaletteSnapshot(const std::array<SDL_Color, 256> &palette, uint64_t version);
+[[nodiscard]] CompositionAttachment MakeIndexedAlbedoAttachment(IndexBufferView indexBuffer, Size logicalSize, const DirtyRectList &dirtyRects);
+[[nodiscard]] CompositionAttachment MakePaletteAttachment(const PaletteSnapshot &palette);
+[[nodiscard]] const CompositionAttachment *FindCompositionAttachment(std::span<const CompositionAttachment> attachments, CompositionAttachmentRole role);
+[[nodiscard]] CompositionAttachmentUploadPlan PlanCompositionAttachmentUpload(const CompositionAttachment &attachment, bool alreadyUploaded, uint64_t uploadedVersion);
 [[nodiscard]] std::unique_ptr<IFrameCompositorBackend> CreateCpuFrameCompositorBackend();
 
 class IFrameCompositor {
@@ -163,10 +226,19 @@ private:
 	bool diagnosticTransformEnabled_ = false;
 	RenderLayerDiagnosticMode renderLayerDiagnosticMode_ = RenderLayerDiagnosticMode::Off;
 	RenderLayerMapView renderLayerMap_ {};
+	RenderWorldMaskMapView worldMaskMap_ {};
+	RenderWorldMaskDiagnosticMode renderWorldMaskDiagnosticMode_ = RenderWorldMaskDiagnosticMode::Off;
+	RenderWorldProxyMapView worldProxyMap_ {};
+	RenderWorldProxyDiagnosticMode renderWorldProxyDiagnosticMode_ = RenderWorldProxyDiagnosticMode::Off;
+	RenderClassicLightMapView classicLightMap_ {};
+	RenderSmoothLightSourceView smoothLightSources_ {};
 	bool hasComposedFrame_ = false;
 	uint64_t lastComposedPaletteVersion_ = 0;
+	uint64_t lastComposedClassicLightMapVersion_ = 0;
 	bool lastComposedDiagnosticTransformEnabled_ = false;
 	RenderLayerDiagnosticMode lastRenderLayerDiagnosticMode_ = RenderLayerDiagnosticMode::Off;
+	RenderWorldMaskDiagnosticMode lastRenderWorldMaskDiagnosticMode_ = RenderWorldMaskDiagnosticMode::Off;
+	RenderWorldProxyDiagnosticMode lastRenderWorldProxyDiagnosticMode_ = RenderWorldProxyDiagnosticMode::Off;
 	bool outputSurfaceChangedSinceComposition_ = false;
 	bool indexBufferChangedSinceComposition_ = false;
 	bool logicalSizeChangedSinceComposition_ = false;

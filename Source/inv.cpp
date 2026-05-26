@@ -32,13 +32,13 @@
 #include "engine/render/text_render.hpp"
 #include "engine/size.hpp"
 #include "hwcursor.hpp"
-#include "players/item_iterators.hpp"
 #include "levels/tile_properties.hpp"
 #include "levels/town.h"
 #include "minitext.h"
 #include "options.h"
 #include "panels/ui_panels.hpp"
 #include "player.h"
+#include "players/item_iterators.hpp"
 #include "plrmsg.h"
 #include "qol/stash.h"
 #include "qol/visual_store.h"
@@ -183,6 +183,17 @@ const Rectangle InvRect[] = {
 	// clang-format on
 };
 
+Rectangle GetInventoryPanelRect()
+{
+	return {
+		GetPanelPosition(UiPanels::Inventory, { 0, 0 }),
+		{
+		    SidePanelSize.width,
+		    InvRect[SLOTXY_INV_LAST].position.y + InvRect[SLOTXY_INV_LAST].size.height + 12,
+		},
+	};
+}
+
 namespace {
 
 void DrawPlaceholderFrame(const Surface &out, Point position, Size size)
@@ -205,20 +216,9 @@ void DrawPlaceholderSlot(const Surface &out, Rectangle slot)
 	DrawPlaceholderFrame(out, position, slot.size);
 }
 
-Rectangle GetPlaceholderInventoryPanelRect()
-{
-	return {
-		GetPanelPosition(UiPanels::Inventory, { 0, 0 }),
-		{
-			SidePanelSize.width,
-			InvRect[SLOTXY_INV_LAST].position.y + InvRect[SLOTXY_INV_LAST].size.height + 12,
-		},
-	};
-}
-
 void DrawPlaceholderInventoryPanel(const Surface &out)
 {
-	const Rectangle panel = GetPlaceholderInventoryPanelRect();
+	const Rectangle panel = GetInventoryPanelRect();
 	const uint8_t panelFill = PAL16_BLUE + 15;
 	const uint8_t innerFill = PAL16_GRAY + 14;
 
@@ -260,7 +260,7 @@ void DrawExpandedInventoryGrid(const Surface &out)
 
 bool ContainsInventoryPanelSlot(Point screenPosition)
 {
-	if (GetPlaceholderInventoryPanelRect().contains(screenPosition))
+	if (GetInventoryPanelRect().contains(screenPosition))
 		return true;
 
 	const Point rightPanelPoint = static_cast<Point>(screenPosition - GetRightPanel().position);

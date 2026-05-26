@@ -6,7 +6,9 @@
 #include "automap.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
+#include <vector>
 
 #include <fmt/format.h>
 
@@ -161,6 +163,25 @@ struct AutomapTile {
  * Maps from tile_id to automap type.
  */
 std::array<AutomapTile, 256> AutomapTypeTiles;
+
+struct CachedAutomapTileOverlay {
+	bool valid = false;
+	uint64_t fingerprint = 0;
+	std::vector<RenderAutomapOverlayRect> rects;
+};
+
+std::array<std::array<CachedAutomapTileOverlay, DMAXY>, DMAXX> CachedAutomapTileOverlays;
+
+void ClearAutomapTileOverlayCache()
+{
+	for (auto &column : CachedAutomapTileOverlays) {
+		for (CachedAutomapTileOverlay &tile : column) {
+			tile.valid = false;
+			tile.fingerprint = 0;
+			tile.rects.clear();
+		}
+	}
+}
 
 /**
  * @brief Draw a diamond on top tile.
@@ -975,10 +996,58 @@ AutomapTile GetAutomapTypeView(Point map)
 	return GetAutomapTileType(map);
 }
 
+void HashCombine(uint64_t &seed, uint64_t value)
+{
+	seed ^= value + 0x9E3779B97F4A7C15ULL + (seed << 6) + (seed >> 2);
+}
+
+uint64_t AutomapTileOverlayFingerprint(Point map)
+{
+	uint64_t fingerprint = 0xCBF29CE484222325ULL;
+	HashCombine(fingerprint, static_cast<uint64_t>(GetAutomapType()));
+	HashCombine(fingerprint, static_cast<uint64_t>(AutoMapScale));
+	HashCombine(fingerprint, static_cast<uint64_t>(MinimapScale));
+	HashCombine(fingerprint, static_cast<uint64_t>(leveltype));
+	HashCombine(fingerprint, static_cast<uint64_t>(currlevel));
+	HashCombine(fingerprint, static_cast<uint64_t>(setlevel));
+	HashCombine(fingerprint, static_cast<uint64_t>(setlvlnum));
+	HashCombine(fingerprint, static_cast<uint64_t>(Quests[Q_PWATER]._qactive));
+	HashCombine(fingerprint, static_cast<uint64_t>(Quests[Q_PWATER]._qslvl));
+
+	for (int dy = -1; dy <= 1; ++dy) {
+		for (int dx = -1; dx <= 1; ++dx) {
+			const Point viewPosition { map.x + dx, map.y + dy };
+			const uint8_t exploration = (viewPosition.x >= 0 && viewPosition.x < DMAXX && viewPosition.y >= 0 && viewPosition.y < DMAXY)
+			    ? AutomapView[viewPosition.x][viewPosition.y]
+			    : 0xFF;
+			HashCombine(fingerprint, exploration);
+		}
+	}
+
+	return fingerprint;
+}
+
+bool AutomapTileOverlayCacheAllowed(const Surface &out, Point map)
+{
+	if (!RenderAutomapOverlayCaptureActive())
+		return false;
+	if (GetAutomapType() == AutomapType::Minimap)
+		return false;
+	if (map.x < 0 || map.x >= DMAXX || map.y < 0 || map.y >= DMAXY)
+		return false;
+#ifdef _DEBUG
+	if (DebugVision)
+		return false;
+#endif
+
+	const int margin = std::max(96, AmLine(AmLineLength::OctupleTile) * 4 + 8);
+	return out.w() > margin * 2 && out.h() > margin * 2;
+}
+
 /**
  * @brief Renders the given automap shape at the specified screen coordinates.
  */
-void DrawAutomapTile(const Surface &out, Point center, Point map)
+void DrawAutomapTileUncached(const Surface &out, Point center, Point map)
 {
 	uint8_t colorBright = MapColorsBright;
 	uint8_t colorDim = MapColorsDim;
@@ -1253,6 +1322,44 @@ void DrawAutomapTile(const Surface &out, Point center, Point map)
 	}
 }
 
+void AppendCachedAutomapTileOverlay(const Surface &out, Point center, const std::vector<RenderAutomapOverlayRect> &rects)
+{
+	for (RenderAutomapOverlayRect rect : rects) {
+		rect.rect.position += Displacement { center.x, center.y };
+		AppendRenderAutomapOverlayRect(out, rect);
+	}
+}
+
+void DrawAutomapTile(const Surface &out, Point center, Point map)
+{
+	if (!AutomapTileOverlayCacheAllowed(out, map)) {
+		DrawAutomapTileUncached(out, center, map);
+		return;
+	}
+
+	CachedAutomapTileOverlay &cache = CachedAutomapTileOverlays[map.x][map.y];
+	const uint64_t fingerprint = AutomapTileOverlayFingerprint(map);
+	if (!cache.valid || cache.fingerprint != fingerprint) {
+		const Point neutralCenter { out.w() / 2, out.h() / 2 };
+
+		BeginRenderAutomapOverlaySubCapture();
+		DrawAutomapTileUncached(out, neutralCenter, map);
+		const RenderAutomapOverlayView generatedOverlay = EndRenderAutomapOverlaySubCapture();
+
+		cache.rects.clear();
+		cache.rects.reserve(generatedOverlay.rectCount);
+		for (std::size_t i = 0; i < generatedOverlay.rectCount; ++i) {
+			RenderAutomapOverlayRect rect = generatedOverlay.rects[i];
+			rect.rect.position -= Displacement { neutralCenter.x, neutralCenter.y };
+			cache.rects.push_back(rect);
+		}
+		cache.valid = true;
+		cache.fingerprint = fingerprint;
+	}
+
+	AppendCachedAutomapTileOverlay(out, center, cache.rects);
+}
+
 Displacement GetAutomapScreen()
 {
 	Displacement screen = {};
@@ -1425,7 +1532,7 @@ void DrawAutomapPlr(const Surface &out, const Displacement &myPlayerOffset, cons
 /**
  * @brief Renders game info, such as the name of the current level, and in multi player the name of the game and the game password.
  */
-void DrawAutomapText(const Surface &out)
+void DrawAutomapTextInternal(const Surface &out)
 {
 	Point linePosition { 8, 8 };
 
@@ -1546,6 +1653,11 @@ std::unique_ptr<AutomapTile[]> LoadAutomapData(size_t &tileCount)
 
 } // namespace
 
+void DrawAutomapText(const Surface &out)
+{
+	DrawAutomapTextInternal(out);
+}
+
 bool AutomapActive;
 AutomapType CurrentAutomapType = AutomapType::Opaque;
 uint8_t AutomapView[DMAXX][DMAXY];
@@ -1579,6 +1691,8 @@ void InitAutomapOnce()
 
 void InitAutomap()
 {
+	ClearAutomapTileOverlayCache();
+
 	size_t tileCount = 0;
 	const std::unique_ptr<AutomapTile[]> tileTypes = LoadAutomapData(tileCount);
 
@@ -1750,7 +1864,7 @@ void AutomapZoomOut()
 	scale -= 25;
 }
 
-void DrawAutomap(const Surface &out)
+void UpdateAutomapOrigin()
 {
 	Automap = { (ViewPosition.x - 8) / 2, (ViewPosition.y - 8) / 2 };
 	if (leveltype != DTYPE_TOWN) {
@@ -1767,12 +1881,10 @@ void DrawAutomap(const Surface &out)
 		AutomapOffset.deltaY--;
 
 	Automap += AutomapOffset;
+}
 
-	const Player &myPlayer = *MyPlayer;
-	Displacement myPlayerOffset = {};
-	if (myPlayer.isWalking())
-		myPlayerOffset = GetOffsetForWalking(myPlayer.AnimInfo, myPlayer._pdir, true);
-
+int GetAutomapCellCount(const Displacement myPlayerOffset, const bool alwaysAddWalkingCell, const int extraCells)
+{
 	const int scale = (GetAutomapType() == AutomapType::Minimap) ? MinimapScale : AutoMapScale;
 	const int d = (scale * 64) / 100;
 	int cells = (2 * (gnScreenWidth / 2 / d)) + 1;
@@ -1780,35 +1892,14 @@ void DrawAutomap(const Surface &out)
 		cells++;
 	if (((gnScreenWidth / 2) % d) >= (scale * 32) / 100)
 		cells++;
-	if ((myPlayerOffset.deltaX + myPlayerOffset.deltaY) != 0)
+	if ((myPlayerOffset.deltaX + myPlayerOffset.deltaY) != 0 || alwaysAddWalkingCell)
 		cells++;
+	return cells + extraCells;
+}
 
-	if (GetAutomapType() == AutomapType::Minimap) {
-		// Background fill
-		DrawHalfTransparentRectTo(out, MinimapRect.position.x, MinimapRect.position.y, MinimapRect.size.width, MinimapRect.size.height);
-
-		const uint8_t frameShadowColor = PAL16_YELLOW + 12;
-
-		// Shadow
-		DrawHorizontalLine(out, MinimapRect.position + Displacement { -1, -1 }, MinimapRect.size.width + 1, frameShadowColor);
-		DrawHorizontalLine(out, MinimapRect.position + Displacement { -2, MinimapRect.size.height + 1 }, MinimapRect.size.width + 4, frameShadowColor);
-		DrawVerticalLine(out, MinimapRect.position + Displacement { -1, 0 }, MinimapRect.size.height, frameShadowColor);
-		DrawVerticalLine(out, MinimapRect.position + Displacement { MinimapRect.size.width + 1, -2 }, MinimapRect.size.height + 3, frameShadowColor);
-
-		// Frame
-		DrawHorizontalLine(out, MinimapRect.position + Displacement { -2, -2 }, MinimapRect.size.width + 3, MapColorsDim);
-		DrawHorizontalLine(out, MinimapRect.position + Displacement { -2, MinimapRect.size.height }, MinimapRect.size.width + 3, MapColorsDim);
-		DrawVerticalLine(out, MinimapRect.position + Displacement { -2, -1 }, MinimapRect.size.height + 1, MapColorsDim);
-		DrawVerticalLine(out, MinimapRect.position + Displacement { MinimapRect.size.width, -1 }, MinimapRect.size.height + 1, MapColorsDim);
-
-		if (AutoMapShowItems)
-			SearchAutomapItem(out, myPlayerOffset, 8, [](Point position) {
-				return dItem[position.x][position.y] != 0;
-			});
-	}
-
+Point GetAutomapScreenForCells(const int cells, const Displacement myPlayerOffset)
+{
 	Point screen = {};
-
 	screen += GetAutomapScreen();
 
 	if ((cells & 1) != 0) {
@@ -1828,6 +1919,7 @@ void DrawAutomap(const Surface &out)
 		screen.y -= AmOffset(AmWidthOffset::None, AmHeightOffset::HalfTileDown).deltaY;
 	}
 
+	const int scale = (GetAutomapType() == AutomapType::Minimap) ? MinimapScale : AutoMapScale;
 	screen.x += scale * myPlayerOffset.deltaX / 100 / 2;
 	screen.y += scale * myPlayerOffset.deltaY / 100 / 2;
 
@@ -1840,7 +1932,14 @@ void DrawAutomap(const Surface &out)
 		}
 	}
 
-	Point map = { Automap.x - cells, Automap.y - 1 };
+	return screen;
+}
+
+void DrawAutomapGeometryTiles(const Surface &out, AutomapOverlayGeometryPlacement placement)
+{
+	Point screen = placement.screen;
+	Point map = placement.map;
+	const int cells = placement.cells;
 
 	for (int i = 0; i <= cells + 1; i++) {
 		Point tile1 = screen;
@@ -1858,21 +1957,121 @@ void DrawAutomap(const Surface &out)
 		map.x++;
 		screen.y += AmOffset(AmWidthOffset::None, AmHeightOffset::DoubleTileDown).deltaY;
 	}
+}
 
-	for (const Player &player : Players) {
-		if (player.isOnActiveLevel() && player.plractive && !player._pLvlChanging && (&player == MyPlayer || player.friendlyMode)) {
-			DrawAutomapPlr(out, myPlayerOffset, player);
+AutomapOverlayGeometryPlacement GetAutomapOverlayGeometryPlacement(const int extraCells)
+{
+	UpdateAutomapOrigin();
+	const Displacement myPlayerOffset {};
+	const int cells = GetAutomapCellCount(myPlayerOffset, true, extraCells);
+	return {
+		GetAutomapScreenForCells(cells, myPlayerOffset),
+		{ Automap.x - cells, Automap.y - 1 },
+		cells,
+	};
+}
+
+void DrawAutomapOverlayGeometry(const Surface &out, const AutomapOverlayGeometryPlacement placement)
+{
+	DrawAutomapGeometryTiles(out, placement);
+}
+
+Displacement GetAutomapOverlayGeometryOffset(const AutomapOverlayGeometryPlacement cachedPlacement, const AutomapOverlayGeometryPlacement currentPlacement)
+{
+	const int cachedDiff = cachedPlacement.map.x - cachedPlacement.map.y;
+	const int currentDiff = currentPlacement.map.x - currentPlacement.map.y;
+	const int cachedSum = cachedPlacement.map.x + cachedPlacement.map.y;
+	const int currentSum = currentPlacement.map.x + currentPlacement.map.y;
+	return {
+		currentPlacement.screen.x - cachedPlacement.screen.x + (cachedDiff - currentDiff) * AmOffset(AmWidthOffset::FullTileRight, AmHeightOffset::None).deltaX,
+		currentPlacement.screen.y - cachedPlacement.screen.y + (cachedSum - currentSum) * AmOffset(AmWidthOffset::None, AmHeightOffset::FullTileDown).deltaY,
+	};
+}
+
+void DrawAutomapInternal(
+    const Surface &out,
+    const bool drawGeometry,
+    const bool drawPlayers,
+    const bool drawDynamicHighlights,
+    const bool drawText,
+    const bool useWalkingOffset,
+    const bool alwaysAddWalkingCell)
+{
+	UpdateAutomapOrigin();
+
+	const Player &myPlayer = *MyPlayer;
+	Displacement myPlayerOffset = {};
+	if (useWalkingOffset && myPlayer.isWalking())
+		myPlayerOffset = GetOffsetForWalking(myPlayer.AnimInfo, myPlayer._pdir, true);
+
+	const int cells = GetAutomapCellCount(myPlayerOffset, alwaysAddWalkingCell, 0);
+
+	if (drawGeometry && GetAutomapType() == AutomapType::Minimap) {
+		// Background fill
+		DrawHalfTransparentRectTo(out, MinimapRect.position.x, MinimapRect.position.y, MinimapRect.size.width, MinimapRect.size.height);
+
+		const uint8_t frameShadowColor = PAL16_YELLOW + 12;
+
+		// Shadow
+		DrawHorizontalLine(out, MinimapRect.position + Displacement { -1, -1 }, MinimapRect.size.width + 1, frameShadowColor);
+		DrawHorizontalLine(out, MinimapRect.position + Displacement { -2, MinimapRect.size.height + 1 }, MinimapRect.size.width + 4, frameShadowColor);
+		DrawVerticalLine(out, MinimapRect.position + Displacement { -1, 0 }, MinimapRect.size.height, frameShadowColor);
+		DrawVerticalLine(out, MinimapRect.position + Displacement { MinimapRect.size.width + 1, -2 }, MinimapRect.size.height + 3, frameShadowColor);
+
+		// Frame
+		DrawHorizontalLine(out, MinimapRect.position + Displacement { -2, -2 }, MinimapRect.size.width + 3, MapColorsDim);
+		DrawHorizontalLine(out, MinimapRect.position + Displacement { -2, MinimapRect.size.height }, MinimapRect.size.width + 3, MapColorsDim);
+		DrawVerticalLine(out, MinimapRect.position + Displacement { -2, -1 }, MinimapRect.size.height + 1, MapColorsDim);
+		DrawVerticalLine(out, MinimapRect.position + Displacement { MinimapRect.size.width, -1 }, MinimapRect.size.height + 1, MapColorsDim);
+
+		if (drawDynamicHighlights && AutoMapShowItems)
+			SearchAutomapItem(out, myPlayerOffset, 8, [](Point position) {
+				return dItem[position.x][position.y] != 0;
+			});
+	}
+
+	const AutomapOverlayGeometryPlacement placement {
+		GetAutomapScreenForCells(cells, myPlayerOffset),
+		{ Automap.x - cells, Automap.y - 1 },
+		cells,
+	};
+
+	if (drawGeometry) {
+		DrawAutomapGeometryTiles(out, placement);
+	}
+
+	if (drawPlayers) {
+		for (const Player &player : Players) {
+			if (player.isOnActiveLevel() && player.plractive && !player._pLvlChanging && (&player == MyPlayer || player.friendlyMode)) {
+				DrawAutomapPlr(out, myPlayerOffset, player);
+			}
 		}
 	}
 
-	if (AutoMapShowItems)
+	if (drawDynamicHighlights && AutoMapShowItems)
 		SearchAutomapItem(out, myPlayerOffset, 8, [](Point position) { return dItem[position.x][position.y] != 0; });
 #ifdef _DEBUG
-	if (IsDebugAutomapHighlightNeeded())
+	if (drawDynamicHighlights && IsDebugAutomapHighlightNeeded())
 		SearchAutomapItem(out, myPlayerOffset, std::max(MAXDUNX, MAXDUNY), ShouldHighlightDebugAutomapTile);
 #endif
 
-	DrawAutomapText(out);
+	if (drawText)
+		DrawAutomapText(out);
+}
+
+void DrawAutomap(const Surface &out)
+{
+	DrawAutomapInternal(out, true, true, true, true, true, false);
+}
+
+void DrawAutomapOverlayGeometry(const Surface &out)
+{
+	DrawAutomapOverlayGeometry(out, GetAutomapOverlayGeometryPlacement());
+}
+
+void DrawAutomapOverlayPlayerArrows(const Surface &out)
+{
+	DrawAutomapInternal(out, false, true, false, false, true, false);
 }
 
 void UpdateAutomapExplorer(Point map, MapExplorationType explorer)

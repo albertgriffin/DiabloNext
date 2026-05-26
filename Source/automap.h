@@ -182,6 +182,38 @@ void AutomapZoomOut();
  */
 void DrawAutomap(const Surface &out);
 
+struct AutomapOverlayGeometryPlacement {
+	Point screen {};
+	Point map {};
+	int cells = 0;
+};
+
+/**
+ * @brief Computes the static automap geometry placement used by the GPU overlay path.
+ */
+AutomapOverlayGeometryPlacement GetAutomapOverlayGeometryPlacement(int extraCells = 0);
+
+/**
+ * @brief Renders only static automap geometry to the given buffer.
+ */
+void DrawAutomapOverlayGeometry(const Surface &out);
+void DrawAutomapOverlayGeometry(const Surface &out, AutomapOverlayGeometryPlacement placement);
+
+/**
+ * @brief Computes the screen offset needed to reuse cached automap geometry for another placement.
+ */
+Displacement GetAutomapOverlayGeometryOffset(AutomapOverlayGeometryPlacement cachedPlacement, AutomapOverlayGeometryPlacement currentPlacement);
+
+/**
+ * @brief Renders only automap player arrows to the given buffer.
+ */
+void DrawAutomapOverlayPlayerArrows(const Surface &out);
+
+/**
+ * @brief Renders the automap text overlay to the given buffer.
+ */
+void DrawAutomapText(const Surface &out);
+
 /**
  * @brief Updates automap explorer at point if value is higher than existing.
  */

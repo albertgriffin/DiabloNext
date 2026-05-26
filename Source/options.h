@@ -27,6 +27,7 @@
 
 #include "appfat.h"
 #include "controls/controller_buttons.h"
+#include "engine/render/light_shadow_diagnostics.hpp"
 #include "engine/render/render_layer_diagnostics.hpp"
 #include "engine/size.hpp"
 #include "engine/sound_defs.hpp"
@@ -570,8 +571,18 @@ struct ExperimentalOptions : OptionCategoryBase {
 	OptionEntryEnum<RenderFrameCompositorBackend> renderFrameCompositorBackend;
 	/** @brief Apply a visible RGB transform in the experimental frame compositor. */
 	OptionEntryBoolean renderFrameCompositorDiagnosticTransform;
+	/** @brief Recreate classic world lighting in the SDL_GPU compositor. */
+	OptionEntryBoolean renderAcceleratedClassicLighting;
 	/** @brief Visualize render layer ownership in the experimental frame compositor. */
 	OptionEntryEnum<RenderLayerDiagnosticMode> renderLayerDiagnosticMode;
+	/** @brief Enable development light/shadow diagnostics in the accelerated compositor. */
+	OptionEntryEnum<RenderLightShadowDiagnosticMode> renderLightShadowDiagnosticMode;
+	/** @brief Visualize world material, receiver, occluder, and emissive masks. */
+	OptionEntryEnum<RenderWorldMaskDiagnosticMode> renderWorldMaskDiagnosticMode;
+	/** @brief Visualize proxy depth, height, receiver, and occluder maps. */
+	OptionEntryEnum<RenderWorldProxyDiagnosticMode> renderWorldProxyDiagnosticMode;
+	/** @brief Include actor billboard occluders in proxy maps. */
+	OptionEntryBoolean renderWorldProxyActorOccluders;
 	/** @brief Log renderer performance telemetry. */
 	OptionEntryBoolean renderPerformanceStats;
 };

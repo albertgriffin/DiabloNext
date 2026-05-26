@@ -835,6 +835,7 @@ ExperimentalOptions::ExperimentalOptions()
               { RenderFrameCompositorBackend::SdlGpuPalette, N_("SDL_GPU Palette") },
           })
     , renderFrameCompositorDiagnosticTransform("Render Compositor Diagnostic Transform", OptionEntryFlags::None, N_("Render Compositor Diagnostic Transform"), N_("Apply a visible RGB transform after palette expansion to verify the experimental compositor path."), false)
+    , renderAcceleratedClassicLighting("Render Accelerated Classic Lighting", OptionEntryFlags::None, N_("Render Accelerated Classic Lighting"), N_("Recreate classic world lighting in SDL_GPU RGB space from unlit indexed world input."), false)
     , renderLayerDiagnosticMode("Render Layer Diagnostics", OptionEntryFlags::None, N_("Render Layer Diagnostics"), N_("Visualize render layer ownership in the experimental frame compositor."), RenderLayerDiagnosticMode::Off,
           {
               { RenderLayerDiagnosticMode::Off, N_("Off") },
@@ -842,6 +843,33 @@ ExperimentalOptions::ExperimentalOptions()
               { RenderLayerDiagnosticMode::Outline, N_("Outline") },
               { RenderLayerDiagnosticMode::TintAndOutline, N_("Tint + Outline") },
           })
+    , renderLightShadowDiagnosticMode("Render Light/Shadow Diagnostic", OptionEntryFlags::None, N_("Render Light/Shadow Diagnostic"), N_("Show development light and shadow buffers in the accelerated compositor."), RenderLightShadowDiagnosticMode::Off,
+          {
+              { RenderLightShadowDiagnosticMode::Off, N_("Off") },
+              { RenderLightShadowDiagnosticMode::FinalLitOutput, N_("Final Lit Output") },
+              { RenderLightShadowDiagnosticMode::LightRgb, N_("Light RGB") },
+              { RenderLightShadowDiagnosticMode::ShadowAlpha, N_("Shadow Alpha") },
+          })
+    , renderWorldMaskDiagnosticMode("Render World Mask Diagnostic", OptionEntryFlags::None, N_("Render World Mask Diagnostic"), N_("Visualize world material, receiver, occluder, and emissive masks in the experimental frame compositor."), RenderWorldMaskDiagnosticMode::Off,
+          {
+              { RenderWorldMaskDiagnosticMode::Off, N_("Off") },
+              { RenderWorldMaskDiagnosticMode::Material, N_("Material") },
+              { RenderWorldMaskDiagnosticMode::Receiver, N_("Receiver") },
+              { RenderWorldMaskDiagnosticMode::Occluder, N_("Occluder") },
+              { RenderWorldMaskDiagnosticMode::Emissive, N_("Emissive") },
+          })
+    , renderWorldProxyDiagnosticMode("Render World Proxy Diagnostic", OptionEntryFlags::None, N_("Render World Proxy Diagnostic"), N_("Visualize coarse proxy type, coverage, outline, depth, height, receiver, and occluder maps in the experimental frame compositor."), RenderWorldProxyDiagnosticMode::Off,
+          {
+              { RenderWorldProxyDiagnosticMode::Off, N_("Off") },
+              { RenderWorldProxyDiagnosticMode::Type, N_("Type") },
+              { RenderWorldProxyDiagnosticMode::Coverage, N_("Coverage") },
+              { RenderWorldProxyDiagnosticMode::Outline, N_("Outline") },
+              { RenderWorldProxyDiagnosticMode::Depth, N_("Depth") },
+              { RenderWorldProxyDiagnosticMode::Height, N_("Height") },
+              { RenderWorldProxyDiagnosticMode::Receiver, N_("Receiver") },
+              { RenderWorldProxyDiagnosticMode::Occluder, N_("Occluder") },
+          })
+    , renderWorldProxyActorOccluders("Render World Proxy Actor Occluders", OptionEntryFlags::None, N_("Render World Proxy Actor Occluders"), N_("Include actor billboard occluders in experimental world proxy diagnostics."), false)
     , renderPerformanceStats("Render Performance Stats", OptionEntryFlags::None, N_("Render Performance Stats"), N_("Log renderer performance telemetry once per second."), false)
 {
 }
@@ -852,7 +880,12 @@ std::vector<OptionEntryBase *> ExperimentalOptions::GetEntries()
 		&renderFrameCompositor,
 		&renderFrameCompositorBackend,
 		&renderFrameCompositorDiagnosticTransform,
+		&renderAcceleratedClassicLighting,
 		&renderLayerDiagnosticMode,
+		&renderLightShadowDiagnosticMode,
+		&renderWorldMaskDiagnosticMode,
+		&renderWorldProxyDiagnosticMode,
+		&renderWorldProxyActorOccluders,
 		&renderPerformanceStats,
 	};
 }

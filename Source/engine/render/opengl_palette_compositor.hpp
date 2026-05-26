@@ -19,6 +19,7 @@ namespace devilution {
 
 class IFrameCompositorBackend;
 
+[[nodiscard]] bool OpenGlPaletteCompositorBuildAvailable();
 [[nodiscard]] bool OpenGlPaletteCompositorRequested();
 [[nodiscard]] bool OpenGlPaletteCompositorWindowRequested();
 [[nodiscard]] AcceleratedCompositorWindowFlags ConfigureOpenGlPaletteCompositorWindow();
